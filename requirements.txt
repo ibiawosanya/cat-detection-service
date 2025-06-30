@@ -1,0 +1,33 @@
+# Core Dependencies for Cat Detector Pulumi Project
+
+# Infrastructure as Code
+pulumi>=3.75.0,<4.0.0
+pulumi-aws>=6.0.2,<7.0.0
+
+# AWS SDK and utilities
+boto3>=1.28.0,<2.0.0
+botocore>=1.31.0,<2.0.0
+
+# HTTP client for API calls
+requests>=2.31.0,<3.0.0
+
+# JSON handling and data validation
+pydantic>=2.0.0,<3.0.0
+jsonschema>=4.19.0,<5.0.0
+
+# Environment configuration
+python-dotenv>=1.0.0,<2.0.0
+
+# Essential testing framework
+pytest>=7.4.0,<8.0.0
+pytest-cov>=4.1.0,<5.0.0
+moto>=4.2.0,<5.0.0
+
+# Code quality tools
+black>=23.7.0,<24.0.0
+isort>=5.12.0,<6.0.0
+flake8>=6.0.0,<7.0.0
+
+# Security scanning
+bandit>=1.7.5,<2.0.0
+safety>=2.3.0,<3.0.0
