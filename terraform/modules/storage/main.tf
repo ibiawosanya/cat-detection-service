@@ -64,9 +64,10 @@ resource "aws_dynamodb_table" "scan_results" {
   }
   
   global_secondary_index {
-    name     = "user-created-index"
-    hash_key = "user_id"
-    range_key = "created_at"
+    name            = "user-created-index"
+    hash_key        = "user_id"
+    range_key       = "created_at"
+    projection_type = "ALL"
     
     # Only set capacity if using PROVISIONED billing
     read_capacity  = var.dynamodb_billing_mode == "PROVISIONED" ? var.dynamodb_read_capacity : null
