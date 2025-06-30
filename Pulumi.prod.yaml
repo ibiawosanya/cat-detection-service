@@ -1,5 +1,0 @@
-config:
-  aws:region: eu-west-1
-  cat-detector:environment: prod
-  cat-detector:lambda-memory: 1024
-  cat-detector:lambda-timeout: 60
