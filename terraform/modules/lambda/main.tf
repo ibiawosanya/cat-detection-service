@@ -1,4 +1,4 @@
-# Upload Lambda Function
+# Upload Lambda Function +++
 resource "aws_lambda_function" "upload" {
   filename         = "${path.module}/../../../dist/upload.zip"
   function_name    = "${var.environment}-${var.project}-upload"
