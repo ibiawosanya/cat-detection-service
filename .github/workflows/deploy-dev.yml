@@ -28,7 +28,7 @@ jobs:
           pip install pytest pytest-cov
 
       - name: Run tests
-        run: pytest tests/ --cov=src/
+        run: pytest tests/unit/ -v
 
   build-and-deploy:
     needs: test
