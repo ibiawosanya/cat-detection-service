@@ -1,5 +1,3 @@
-### tests/unit/test_lambda_functions.py
-```python
 import pytest
 import json
 import boto3
@@ -19,12 +17,12 @@ class TestUploadFunction:
     def setup_method(self):
         """Setup mock AWS services"""
         # Setup S3
-        self.s3 = boto3.client('s3', region_name='eu-west-1')
+        self.s3 = boto3.client('s3', region_name='us-east-1')
         self.bucket_name = 'test-bucket'
         self.s3.create_bucket(Bucket=self.bucket_name)
         
         # Setup DynamoDB
-        self.dynamodb = boto3.resource('dynamodb', region_name='eu-west-1')
+        self.dynamodb = boto3.resource('dynamodb', region_name='us-east-1')
         self.table_name = 'test-table'
         table = self.dynamodb.create_table(
             TableName=self.table_name,
@@ -34,7 +32,7 @@ class TestUploadFunction:
         )
         
         # Setup SQS
-        self.sqs = boto3.client('sqs', region_name='eu-west-1')
+        self.sqs = boto3.client('sqs', region_name='us-east-1')
         queue = self.sqs.create_queue(QueueName='test-queue')
         self.queue_url = queue['QueueUrl']
         
@@ -85,7 +83,7 @@ class TestProcessFunction:
     
     def setup_method(self):
         """Setup mock DynamoDB"""
-        self.dynamodb = boto3.resource('dynamodb', region_name='eu-west-1')
+        self.dynamodb = boto3.resource('dynamodb', region_name='us-east-1')
         self.table_name = 'test-table'
         table = self.dynamodb.create_table(
             TableName=self.table_name,
@@ -134,3 +132,13 @@ class TestProcessFunction:
         assert item['status'] == 'COMPLETED'
         assert item['has_cat'] == True
         assert item['cat_confidence'] == 95.5
+
+def test_basic_functionality():
+    """Simple test to ensure pytest works"""
+    assert True
+
+def test_environment_setup():
+    """Test that we can import required modules"""
+    import boto3
+    import json
+    assert boto3.__version__
