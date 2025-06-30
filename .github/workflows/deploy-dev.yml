@@ -102,38 +102,35 @@ jobs:
         run: |
           echo "🚀 Starting web UI deployment..."
           
-          # Get Terraform outputs directly
+          # Navigate to terraform directory
           cd terraform/environments/dev
-          API_URL=$(terraform output api_gateway_url | tr -d '"')
-          WEB_BUCKET=$(terraform output web_bucket_name | tr -d '"')
-          CLOUDFRONT_ID=$(terraform output cloudfront_distribution_id | tr -d '"')
+          
+          # Get dynamic outputs from Terraform (NO hardcoded values)
+          API_URL=$(terraform output -raw api_gateway_url)
+          WEB_BUCKET=$(terraform output -raw web_bucket_name)
+          CLOUDFRONT_ID=$(terraform output -raw cloudfront_distribution_id)
+          WEB_URL=$(terraform output -raw web_url)
           
           echo "✅ API URL: $API_URL"
-          echo "✅ Web Bucket: $WEB_BUCKET"
+          echo "✅ Web Bucket: $WEB_BUCKET" 
           echo "✅ CloudFront ID: $CLOUDFRONT_ID"
+          echo "✅ Web URL: $WEB_URL"
           
           # Navigate to web UI directory
           cd ../../../src/web-ui
           
-          # Install dependencies and build
           echo "📦 Installing dependencies..."
           npm install
           
-          echo "🔨 Building React app..."
-          REACT_APP_API_URL=$API_URL npm run build
+          echo "🔨 Building React app with dynamic API URL..."
+          REACT_APP_API_URL="$API_URL" npm run build
           
-          # Deploy to S3
-          echo "☁️ Deploying to S3..."
-          aws s3 sync build/ s3://$WEB_BUCKET --delete
+          echo "☁️ Deploying to dynamic S3 bucket..."
+          aws s3 sync build/ "s3://$WEB_BUCKET" --delete
           
-          # Invalidate CloudFront
           echo "🌐 Invalidating CloudFront cache..."
-          aws cloudfront create-invalidation --distribution-id $CLOUDFRONT_ID --paths "/*"
-          
-          # Run basic API test
-          echo "🧪 Testing API..."
-          curl -f $API_URL/status/test-id || echo "API test completed (expected 404 for non-existent ID)"
+          aws cloudfront create-invalidation --distribution-id "$CLOUDFRONT_ID" --paths "/*"
           
           echo "✅ Deployment completed successfully!"
-          echo "🌐 Web UI: https://$(aws cloudfront get-distribution --id $CLOUDFRONT_ID --query 'Distribution.DomainName' --output text)"
-          echo "🔗 API: $API_URL"
+          echo "🌐 Web UI available at: $WEB_URL"
+          echo "🔗 API available at: $API_URL"
