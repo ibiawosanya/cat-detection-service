@@ -8,11 +8,19 @@ output "sns_topic_arn" {
   value       = var.enable_sns_alerts ? aws_sns_topic.alerts[0].arn : null
 }
 
-output "log_group_names" {
-  description = "Names of the CloudWatch log groups"
+output "dashboard_name" {
+  description = "Name of the CloudWatch dashboard"
+  value       = aws_cloudwatch_dashboard.cat_detection.dashboard_name
+}
+
+output "alarm_names" {
+  description = "Names of the CloudWatch alarms created"
   value = [
-    aws_cloudwatch_log_group.upload_logs.name,
-    aws_cloudwatch_log_group.process_logs.name,
-    aws_cloudwatch_log_group.status_logs.name
+    aws_cloudwatch_metric_alarm.upload_errors.alarm_name,
+    aws_cloudwatch_metric_alarm.process_errors.alarm_name,
+    aws_cloudwatch_metric_alarm.status_errors.alarm_name,
+    aws_cloudwatch_metric_alarm.process_duration.alarm_name,
+    aws_cloudwatch_metric_alarm.sqs_dlq_messages.alarm_name,
+    aws_cloudwatch_metric_alarm.upload_throttles.alarm_name
   ]
 }
