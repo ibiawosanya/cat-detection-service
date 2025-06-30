@@ -103,19 +103,30 @@ jobs:
         run: |
           cd terraform/environments/dev
           API_URL=$(terraform output -raw api_gateway_url)
+          WEB_BUCKET=$(terraform output -raw web_bucket_name)
+          CLOUDFRONT_ID=$(terraform output -raw cloudfront_distribution_id)
           echo "api_url=$API_URL" >> $GITHUB_OUTPUT
+          echo "web_bucket=$WEB_BUCKET" >> $GITHUB_OUTPUT
+          echo "cloudfront_id=$CLOUDFRONT_ID" >> $GITHUB_OUTPUT
+          echo "API URL: $API_URL"
+          echo "Web Bucket: $WEB_BUCKET"
+          echo "CloudFront ID: $CLOUDFRONT_ID"
 
       - name: Build and Deploy Web UI
         run: |
           cd src/web-ui
-          npm install
+          npm ci
           REACT_APP_API_URL=${{ steps.get_api_url.outputs.api_url }} npm run build
           
           # Deploy to S3
-          aws s3 sync build/ s3://$(cd ../../terraform/environments/dev && terraform output -raw web_bucket_name) --delete
+          aws s3 sync build/ s3://${{ steps.get_api_url.outputs.web_bucket }} --delete
           
           # Invalidate CloudFront
-          aws cloudfront create-invalidation --distribution-id $(cd ../../terraform/environments/dev && terraform output -raw cloudfront_distribution_id) --paths "/*"
+          aws cloudfront create-invalidation \
+            --distribution-id ${{ steps.get_api_url.outputs.cloudfront_id }} \
+            --paths "/*"
+          
+          echo "✅ Web UI deployed successfully!"
 
       - name: Run Integration Tests
         run: |
