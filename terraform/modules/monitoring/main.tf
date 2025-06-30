@@ -1,34 +1,3 @@
-# CloudWatch Log Groups
-resource "aws_cloudwatch_log_group" "upload_logs" {
-  name              = "/aws/lambda/${var.environment}-${var.project}-upload"
-  retention_in_days = var.log_retention_days
-  
-  tags = {
-    Environment = var.environment
-    Project     = var.project
-  }
-}
-
-resource "aws_cloudwatch_log_group" "process_logs" {
-  name              = "/aws/lambda/${var.environment}-${var.project}-process"
-  retention_in_days = var.log_retention_days
-  
-  tags = {
-    Environment = var.environment
-    Project     = var.project
-  }
-}
-
-resource "aws_cloudwatch_log_group" "status_logs" {
-  name              = "/aws/lambda/${var.environment}-${var.project}-status"
-  retention_in_days = var.log_retention_days
-  
-  tags = {
-    Environment = var.environment
-    Project     = var.project
-  }
-}
-
 # SNS Topic for Alerts (conditional)
 resource "aws_sns_topic" "alerts" {
   count = var.enable_sns_alerts ? 1 : 0
