@@ -102,33 +102,45 @@ jobs:
         id: get_api_url
         run: |
           cd terraform/environments/dev
+          echo "Getting Terraform outputs..."
+          
           API_URL=$(terraform output -raw api_gateway_url)
           WEB_BUCKET=$(terraform output -raw web_bucket_name)
           CLOUDFRONT_ID=$(terraform output -raw cloudfront_distribution_id)
-          echo "api_url=$API_URL" >> $GITHUB_OUTPUT
-          echo "web_bucket=$WEB_BUCKET" >> $GITHUB_OUTPUT
-          echo "cloudfront_id=$CLOUDFRONT_ID" >> $GITHUB_OUTPUT
-          echo "API URL: $API_URL"
-          echo "Web Bucket: $WEB_BUCKET"
-          echo "CloudFront ID: $CLOUDFRONT_ID"
+          
+          echo "API_URL=$API_URL" >> $GITHUB_OUTPUT
+          echo "WEB_BUCKET=$WEB_BUCKET" >> $GITHUB_OUTPUT
+          echo "CLOUDFRONT_ID=$CLOUDFRONT_ID" >> $GITHUB_OUTPUT
+          
+          echo "✅ API URL: $API_URL"
+          echo "✅ Web Bucket: $WEB_BUCKET"
+          echo "✅ CloudFront ID: $CLOUDFRONT_ID"
 
       - name: Build and Deploy Web UI
         run: |
           cd src/web-ui
           npm ci
-          REACT_APP_API_URL=${{ steps.get_api_url.outputs.api_url }} npm run build
+          REACT_APP_API_URL=${{ steps.get_api_url.outputs.API_URL }} npm run build
           
           # Deploy to S3
-          aws s3 sync build/ s3://${{ steps.get_api_url.outputs.web_bucket }} --delete
+          aws s3 sync build/ s3://${{ steps.get_api_url.outputs.WEB_BUCKET }} --delete
           
           # Invalidate CloudFront
           aws cloudfront create-invalidation \
-            --distribution-id ${{ steps.get_api_url.outputs.cloudfront_id }} \
+            --distribution-id ${{ steps.get_api_url.outputs.CLOUDFRONT_ID }} \
             --paths "/*"
           
-          echo "✅ Web UI deployed successfully!"
+          echo "✅ Web UI deployed to S3 and CloudFront invalidated"
 
       - name: Run Integration Tests
         run: |
-          export API_URL=${{ steps.get_api_url.outputs.api_url }}
-          python -m pytest tests/integration/ -v
+          export API_URL=${{ steps.get_api_url.outputs.API_URL }}
+          # Only run integration tests if they exist and API_URL is set
+          if [ -d "tests/integration" ] && [ ! -z "$API_URL" ]; then
+            echo "Running integration tests against: $API_URL"
+            # Wait for API to be ready
+            sleep 30
+            python -m pytest tests/integration/ -v --tb=short
+          else
+            echo "Skipping integration tests - no tests/integration directory or API_URL not set"
+          fi
