@@ -53,6 +53,7 @@ jobs:
         uses: hashicorp/setup-terraform@v2
         with:
           terraform_version: 1.5.0
+          terraform_wrapper: false  # This is crucial!
 
       - name: Configure AWS credentials
         uses: aws-actions/configure-aws-credentials@v3
@@ -98,34 +99,45 @@ jobs:
           cd terraform/environments/dev
           terraform apply -auto-approve
 
-      - name: Deploy Web UI and Run Tests
+      - name: Get Terraform Outputs
+        id: terraform_outputs
         run: |
-          echo "🚀 Starting web UI deployment..."
-          
-          # Navigate to terraform directory
           cd terraform/environments/dev
           
-          # Get dynamic outputs from Terraform (NO hardcoded values)
+          # Capture outputs and set as step outputs
           API_URL=$(terraform output -raw api_gateway_url)
           WEB_BUCKET=$(terraform output -raw web_bucket_name)
           CLOUDFRONT_ID=$(terraform output -raw cloudfront_distribution_id)
           WEB_URL=$(terraform output -raw web_url)
           
+          echo "api_url=$API_URL" >> $GITHUB_OUTPUT
+          echo "web_bucket=$WEB_BUCKET" >> $GITHUB_OUTPUT
+          echo "cloudfront_id=$CLOUDFRONT_ID" >> $GITHUB_OUTPUT
+          echo "web_url=$WEB_URL" >> $GITHUB_OUTPUT
+          
           echo "✅ API URL: $API_URL"
           echo "✅ Web Bucket: $WEB_BUCKET" 
           echo "✅ CloudFront ID: $CLOUDFRONT_ID"
           echo "✅ Web URL: $WEB_URL"
+
+      - name: Deploy Web UI
+        run: |
+          echo "🚀 Starting web UI deployment..."
           
-          # Navigate to web UI directory
-          cd ../../../src/web-ui
+          # Use step outputs instead of command substitution
+          API_URL="${{ steps.terraform_outputs.outputs.api_url }}"
+          WEB_BUCKET="${{ steps.terraform_outputs.outputs.web_bucket }}"
+          CLOUDFRONT_ID="${{ steps.terraform_outputs.outputs.cloudfront_id }}"
+          WEB_URL="${{ steps.terraform_outputs.outputs.web_url }}"
           
           echo "📦 Installing dependencies..."
+          cd src/web-ui
           npm install
           
           echo "🔨 Building React app with dynamic API URL..."
           REACT_APP_API_URL="$API_URL" npm run build
           
-          echo "☁️ Deploying to dynamic S3 bucket..."
+          echo "☁️ Deploying to S3 bucket: $WEB_BUCKET"
           aws s3 sync build/ "s3://$WEB_BUCKET" --delete
           
           echo "🌐 Invalidating CloudFront cache..."
