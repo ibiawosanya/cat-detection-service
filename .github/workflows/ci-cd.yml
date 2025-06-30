@@ -213,27 +213,27 @@ jobs:
 
       - name: Check documentation structure
         run: |
-          echo "Ì≥Å Repository structure:"
+          echo "ÔøΩÔøΩÔøΩ Repository structure:"
           tree -L 3 || ls -la
           
           echo ""
-          echo "Ì∑™ Test files:"
+          echo "ÔøΩÔøΩÔøΩ Test files:"
           find tests/ -name "*.py" | head -10 || echo "No test files found"
           
           echo ""
-          echo "Ì≥ú Scripts:"
+          echo "ÔøΩÔøΩÔøΩ Scripts:"
           find scripts/ -name "*.sh" | head -10 || echo "No script files found"
 
       - name: Create test summary
         run: |
-          echo "## Ì∑™ Test Summary" > test-summary.md
+          echo "## ÔøΩÔøΩÔøΩ Test Summary" > test-summary.md
           echo "" >> test-summary.md
           echo "- **Infrastructure Tests**: ‚úÖ Available" >> test-summary.md
           echo "- **Integration Tests**: ‚úÖ Available" >> test-summary.md
           echo "- **Code Quality**: ‚úÖ Black, flake8, bandit" >> test-summary.md
           echo "- **Security Scanning**: ‚úÖ Bandit, Safety" >> test-summary.md
           echo "" >> test-summary.md
-          echo "## ÌøóÔ∏è Infrastructure" >> test-summary.md
+          echo "## ÔøΩÔøΩÔøΩÔ∏è Infrastructure" >> test-summary.md
           echo "" >> test-summary.md
           echo "- **IaC Tool**: Pulumi" >> test-summary.md
           echo "- **Cloud Provider**: AWS" >> test-summary.md
@@ -247,3 +247,131 @@ jobs:
           path: |
             README.md
             test-summary.md
+
+  # Job 5: Infrastructure Deployment
+  deploy:
+    name: Deploy Infrastructure
+    runs-on: ubuntu-latest
+    needs: infrastructure-validation
+    if: |
+      github.event_name == 'workflow_dispatch' && 
+      github.event.inputs.environment != 'destroy' &&
+      github.repository == 'ibiawosanya/cat-detector-ice-submission'
+    environment: ${{ github.event.inputs.environment || 'dev' }}
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.9'
+
+      - name: Install Pulumi CLI
+        uses: pulumi/action-install-pulumi-cli@v2
+
+      - name: Cache pip dependencies
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/pip
+          key: ${{ runner.os }}-pip-${{ hashFiles('**/requirements*.txt') }}
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install pulumi pulumi-aws
+          if [ -f requirements.txt ]; then pip install -r requirements.txt; fi
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Pulumi Login
+        run: pulumi login
+
+      - name: Select or create Pulumi stack
+        run: |
+          ENVIRONMENT="${{ github.event.inputs.environment || 'dev' }}"
+          pulumi stack select $ENVIRONMENT || pulumi stack init $ENVIRONMENT
+          pulumi config set aws:region ${{ env.AWS_REGION }}
+          pulumi config set environment $ENVIRONMENT
+          pulumi config set lambda-memory 512
+          pulumi config set lambda-timeout 30
+
+      - name: Deploy Infrastructure
+        run: |
+          echo "üöÄ Deploying to ${{ github.event.inputs.environment || 'dev' }} environment..."
+          pulumi up --yes --skip-preview
+
+      - name: Export Outputs
+        run: |
+          echo "üìã Deployment Complete! Here are your endpoints:"
+          echo "Website URL: $(pulumi stack output website_url)"
+          echo "API URL: $(pulumi stack output api_url)"
+          
+          # Save outputs to file for later use
+          pulumi stack output --json > deployment-outputs.json
+
+      - name: Upload deployment outputs
+        uses: actions/upload-artifact@v4
+        with:
+          name: deployment-outputs-${{ github.event.inputs.environment }}-${{ github.run_number }}
+          path: deployment-outputs.json
+
+      - name: Comment deployment results
+        if: github.event_name == 'workflow_dispatch'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            
+            try {
+              const outputs = JSON.parse(fs.readFileSync('deployment-outputs.json', 'utf8'));
+              
+              const comment = `## üöÄ Deployment Complete!
+
+  # Job 6: Destroy Infrastructure (if requested)
+  destroy:
+    name: Destroy Infrastructure
+    runs-on: ubuntu-latest
+    if: |
+      github.event_name == 'workflow_dispatch' && 
+      github.event.inputs.environment == 'destroy'
+    environment: destruction
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.9'
+
+      - name: Install Pulumi CLI
+        uses: pulumi/action-install-pulumi-cli@v2
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install pulumi pulumi-aws
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Pulumi Login
+        run: pulumi login
+
+      - name: Destroy Infrastructure
+        run: |
+          echo "üóëÔ∏è Destroying dev environment..."
+          pulumi stack select dev || echo "Stack not found"
+          pulumi destroy --yes --skip-preview || echo "Nothing to destroy"
