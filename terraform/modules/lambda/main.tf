@@ -1,4 +1,4 @@
-# Upload Lambda Function +++
+# Upload Lambda Function
 resource "aws_lambda_function" "upload" {
   filename         = "${path.module}/../../../dist/upload.zip"
   function_name    = "${var.environment}-${var.project}-upload"
@@ -26,8 +26,7 @@ resource "aws_lambda_function" "upload" {
   }
   
   depends_on = [
-    aws_iam_role_policy_attachment.lambda_basic,
-    aws_cloudwatch_log_group.upload_logs
+    aws_iam_role_policy_attachment.lambda_basic
   ]
   
   tags = {
@@ -62,8 +61,7 @@ resource "aws_lambda_function" "process" {
   }
   
   depends_on = [
-    aws_iam_role_policy_attachment.lambda_basic,
-    aws_cloudwatch_log_group.process_logs
+    aws_iam_role_policy_attachment.lambda_basic
   ]
   
   tags = {
@@ -97,8 +95,7 @@ resource "aws_lambda_function" "status" {
   }
   
   depends_on = [
-    aws_iam_role_policy_attachment.lambda_basic,
-    aws_cloudwatch_log_group.status_logs
+    aws_iam_role_policy_attachment.lambda_basic
   ]
   
   tags = {
@@ -116,10 +113,22 @@ resource "aws_lambda_event_source_mapping" "sqs_processor" {
   depends_on = [aws_iam_role_policy_attachment.lambda_basic]
 }
 
-# CloudWatch Log Groups
-resource "aws_cloudwatch_log_group" "upload_logs" {
-  name              = "/aws/lambda/${var.environment}-${var.project}-upload"
-  retention_in_days = 14
+# Lambda Execution Role
+resource "aws_iam_role" "lambda_role" {
+  name = "${var.environment}-${var.project}-lambda-role"
+
+  assume_role_policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Action = "sts:AssumeRole"
+        Effect = "Allow"
+        Principal = {
+          Service = "lambda.amazonaws.com"
+        }
+      }
+    ]
+  })
   
   tags = {
     Environment = var.environment
@@ -127,22 +136,69 @@ resource "aws_cloudwatch_log_group" "upload_logs" {
   }
 }
 
-resource "aws_cloudwatch_log_group" "process_logs" {
-  name              = "/aws/lambda/${var.environment}-${var.project}-process"
-  retention_in_days = 14
-  
-  tags = {
-    Environment = var.environment
-    Project     = var.project
-  }
+# Basic Lambda execution policy
+resource "aws_iam_role_policy_attachment" "lambda_basic" {
+  role       = aws_iam_role.lambda_role.name
+  policy_arn = "arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole"
 }
 
-resource "aws_cloudwatch_log_group" "status_logs" {
-  name              = "/aws/lambda/${var.environment}-${var.project}-status"
-  retention_in_days = 14
-  
-  tags = {
-    Environment = var.environment
-    Project     = var.project
-  }
+# Custom policy for our services
+resource "aws_iam_role_policy" "lambda_custom_policy" {
+  name = "${var.environment}-${var.project}-lambda-policy"
+  role = aws_iam_role.lambda_role.id
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Effect = "Allow"
+        Action = [
+          "s3:GetObject",
+          "s3:PutObject",
+          "s3:DeleteObject"
+        ]
+        Resource = "${var.s3_bucket_arn}/*"
+      },
+      {
+        Effect = "Allow"
+        Action = [
+          "dynamodb:GetItem",
+          "dynamodb:PutItem",
+          "dynamodb:UpdateItem",
+          "dynamodb:Query",
+          "dynamodb:Scan"
+        ]
+        Resource = [
+          var.dynamodb_table_arn,
+          "${var.dynamodb_table_arn}/index/*"
+        ]
+      },
+      {
+        Effect = "Allow"
+        Action = [
+          "sqs:SendMessage",
+          "sqs:ReceiveMessage",
+          "sqs:DeleteMessage",
+          "sqs:GetQueueAttributes"
+        ]
+        Resource = var.sqs_queue_arn
+      },
+      {
+        Effect = "Allow"
+        Action = [
+          "rekognition:DetectLabels"
+        ]
+        Resource = "*"
+      },
+      {
+        Effect = "Allow"
+        Action = [
+          "logs:CreateLogGroup",
+          "logs:CreateLogStream",
+          "logs:PutLogEvents"
+        ]
+        Resource = "arn:aws:logs:*:*:*"
+      }
+    ]
+  })
 }
