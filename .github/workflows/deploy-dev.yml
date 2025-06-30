@@ -117,7 +117,7 @@ jobs:
           
           # Install dependencies and build
           echo "📦 Installing dependencies..."
-          npm ci
+          npm install
           
           echo "🔨 Building React app..."
           REACT_APP_API_URL=$API_URL npm run build
