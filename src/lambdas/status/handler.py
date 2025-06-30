@@ -1,69 +1,140 @@
 import json
 import boto3
 import os
+from decimal import Decimal
 
+# Initialize AWS clients
 dynamodb = boto3.resource('dynamodb')
 
-DYNAMODB_TABLE = os.environ['DYNAMODB_TABLE']
-table = dynamodb.Table(DYNAMODB_TABLE)
+# Environment variables
+RESULTS_TABLE = os.environ['RESULTS_TABLE']
 
-def status(event, context):
+def lambda_handler(event, context):
+    """
+    Retrieve scan status and results from DynamoDB.
+    """
+    
     try:
-        scan_id = event['pathParameters']['id']
+        # Enable CORS for all responses
+        cors_headers = {
+            'Access-Control-Allow-Origin': '*',
+            'Access-Control-Allow-Headers': 'Content-Type',
+            'Access-Control-Allow-Methods': 'OPTIONS,GET'
+        }
         
-        # Get scan result from DynamoDB
-        response = table.get_item(Key={'scan_id': scan_id})
+        # Handle preflight OPTIONS request
+        if event['httpMethod'] == 'OPTIONS':
+            return {
+                'statusCode': 200,
+                'headers': cors_headers,
+                'body': json.dumps({'message': 'CORS preflight'})
+            }
+        
+        # Extract scan_id from path parameters
+        scan_id = event['pathParameters']['scan_id']
+        
+        if not scan_id:
+            return {
+                'statusCode': 400,
+                'headers': cors_headers,
+                'body': json.dumps({'error': 'scan_id is required'})
+            }
+        
+        # Check for debug mode
+        query_params = event.get('queryStringParameters') or {}
+        debug_mode = query_params.get('debug', 'false').lower() == 'true'
+        
+        # Get item from DynamoDB
+        table = dynamodb.Table(RESULTS_TABLE)
+        
+        response = table.get_item(
+            Key={'scan_id': scan_id}
+        )
         
         if 'Item' not in response:
             return {
                 'statusCode': 404,
-                'headers': {
-                    'Access-Control-Allow-Origin': '*',
-                    'Access-Control-Allow-Headers': 'Content-Type',
-                    'Access-Control-Allow-Methods': 'GET'
-                },
+                'headers': cors_headers,
                 'body': json.dumps({'error': 'Scan not found'})
             }
         
         item = response['Item']
         
-        # Prepare response
-        result = {
-            'scan_id': item['scan_id'],
-            'status': item['status'],
-            'created_at': item['created_at'],
-            'updated_at': item['updated_at']
-        }
+        # Convert Decimal types back to float/int for JSON serialization
+        def decimal_to_number(obj):
+            """Convert DynamoDB Decimal types to regular numbers for JSON"""
+            if isinstance(obj, dict):
+                return {k: decimal_to_number(v) for k, v in obj.items()}
+            elif isinstance(obj, list):
+                return [decimal_to_number(v) for v in obj]
+            elif isinstance(obj, Decimal):
+                # Convert Decimal to int if it's a whole number, otherwise float
+                if obj % 1 == 0:
+                    return int(obj)
+                else:
+                    return float(obj)
+            else:
+                return obj
         
-        if item['status'] == 'COMPLETED':
-            result['has_cat'] = item.get('has_cat', False)
-            result['answer'] = 'Yes' if item.get('has_cat', False) else 'No'
-            result['confidence'] = item.get('cat_confidence', 0)
+        # Convert all Decimal types in the item
+        item = decimal_to_number(item)
+        
+        # Prepare the response based on debug mode
+        if debug_mode:
+            # Return full details including debug data
+            result = {
+                'scan_id': item['scan_id'],
+                'status': item['status'],
+                'image_key': item.get('image_key'),
+                'created_at': item.get('created_at'),
+                'updated_at': item.get('updated_at')
+            }
             
-            # Include debug data for power users
-            if event.get('queryStringParameters', {}).get('debug') == 'true':
-                result['debug_labels'] = item.get('debug_labels', [])
-        
-        elif item['status'] == 'ERROR':
-            result['error_message'] = item.get('error_message', 'Unknown error')
+            # Add error message if present
+            if 'error_message' in item:
+                result['error_message'] = item['error_message']
+            
+            # Add results if completed
+            if item['status'] == 'COMPLETED':
+                result.update({
+                    'cats_found': item.get('cats_found', False),
+                    'cat_count': item.get('cat_count', 0),
+                    'highest_confidence': item.get('highest_confidence', 0),
+                    'total_labels': item.get('total_labels', 0),
+                    'debug_data': item.get('debug_data', {})
+                })
+        else:
+            # Return minimal information for normal mode
+            result = {
+                'scan_id': item['scan_id'],
+                'status': item['status']
+            }
+            
+            # Add error message if present
+            if 'error_message' in item:
+                result['error_message'] = item['error_message']
+            
+            # Add basic results if completed
+            if item['status'] == 'COMPLETED':
+                result.update({
+                    'cats_found': item.get('cats_found', False),
+                    'cat_count': item.get('cat_count', 0),
+                    'highest_confidence': item.get('highest_confidence', 0)
+                })
         
         return {
             'statusCode': 200,
-            'headers': {
-                'Access-Control-Allow-Origin': '*',
-                'Access-Control-Allow-Headers': 'Content-Type',
-                'Access-Control-Allow-Methods': 'GET'
-            },
+            'headers': cors_headers,
             'body': json.dumps(result)
         }
         
     except Exception as e:
+        print(f"Error in status handler: {str(e)}")
         return {
             'statusCode': 500,
-            'headers': {
-                'Access-Control-Allow-Origin': '*',
-                'Access-Control-Allow-Headers': 'Content-Type',
-                'Access-Control-Allow-Methods': 'GET'
-            },
-            'body': json.dumps({'error': str(e)})
+            'headers': cors_headers,
+            'body': json.dumps({
+                'error': 'Internal server error',
+                'details': str(e)
+            })
         }
