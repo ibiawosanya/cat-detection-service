@@ -14,7 +14,7 @@ sys.path.append(os.path.join(os.path.dirname(__file__), '../../src/lambdas'))
 @mock_sqs
 class TestUploadFunction:
     
-    def setup_method(self):
+    def setup_method(self, method):
         """Setup mock AWS services"""
         # Setup S3
         self.s3 = boto3.client('s3', region_name='us-east-1')
@@ -81,7 +81,7 @@ class TestUploadFunction:
 @mock_dynamodb
 class TestProcessFunction:
     
-    def setup_method(self):
+    def setup_method(self, method):
         """Setup mock DynamoDB"""
         self.dynamodb = boto3.resource('dynamodb', region_name='us-east-1')
         self.table_name = 'test-table'
