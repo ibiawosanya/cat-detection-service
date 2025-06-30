@@ -12,9 +12,9 @@ terraform {
   }
   
   backend "s3" {
-    bucket = "cat-detection-terraform-state-777"
+    bucket = "cat-detection-terraform-state-20250630-666cdc8a"
     key    = "cat-detection/staging/terraform.tfstate"
-    region = "us-east-1"
+    region = "eu-west-1"
   }
 }
 
