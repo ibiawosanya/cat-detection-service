@@ -113,7 +113,7 @@ jobs:
           echo "✅ CloudFront ID: $CLOUDFRONT_ID"
           
           # Navigate to web UI directory
-          cd ../../src/web-ui
+          cd ../../../src/web-ui
           
           # Install dependencies and build
           echo "📦 Installing dependencies..."
