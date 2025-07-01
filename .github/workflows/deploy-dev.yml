@@ -28,7 +28,6 @@ jobs:
 
       - name: Run unit tests
         run: |
-          # Run unit tests (skip if files don't exist)
           if [ -f "tests/unit/test_lambda_functions.py" ]; then
             echo "Running unit tests..."
             pytest tests/unit/ -v
@@ -87,7 +86,7 @@ jobs:
           tfsec terraform/ || echo "⚠️  Terraform security issues found, but continuing..."
 
   build-and-deploy:
-    needs: [test, security]  # Added security dependency
+    needs: [test, security]
     runs-on: ubuntu-latest
     if: github.event_name == 'push'
     
@@ -109,7 +108,7 @@ jobs:
         uses: hashicorp/setup-terraform@v2
         with:
           terraform_version: 1.5.0
-          terraform_wrapper: false  # This is crucial!
+          terraform_wrapper: false
 
       - name: Configure AWS credentials
         uses: aws-actions/configure-aws-credentials@v3
@@ -117,6 +116,22 @@ jobs:
           aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
           aws-region: ${{ env.AWS_REGION }}
+
+      - name: Bootstrap Terraform Backend
+        run: |
+          echo "🚀 Bootstrapping Terraform backend for ${{ env.ENVIRONMENT }}..."
+          
+          # Make script executable
+          chmod +x scripts/bootstrap-terraform.sh
+          
+          # Check if backend.tf already exists
+          if [ ! -f "terraform/environments/${{ env.ENVIRONMENT }}/backend.tf" ]; then
+            echo "Creating new Terraform backend..."
+            ./scripts/bootstrap-terraform.sh ${{ env.ENVIRONMENT }} ${{ env.AWS_REGION }}
+          else
+            echo "✅ Backend configuration already exists"
+            cat terraform/environments/${{ env.ENVIRONMENT }}/backend.tf
+          fi
 
       - name: Build Lambda packages
         run: |
@@ -142,23 +157,23 @@ jobs:
 
       - name: Terraform Init
         run: |
-          cd terraform/environments/dev
-          terraform init
+          cd terraform/environments/${{ env.ENVIRONMENT }}
+          terraform init -reconfigure
 
       - name: Terraform Plan
         run: |
-          cd terraform/environments/dev
+          cd terraform/environments/${{ env.ENVIRONMENT }}
           terraform plan
 
       - name: Terraform Apply
         run: |
-          cd terraform/environments/dev
+          cd terraform/environments/${{ env.ENVIRONMENT }}
           terraform apply -auto-approve
 
       - name: Get Terraform Outputs
         id: terraform_outputs
         run: |
-          cd terraform/environments/dev
+          cd terraform/environments/${{ env.ENVIRONMENT }}
           
           # Capture outputs and set as step outputs
           API_URL=$(terraform output -raw api_gateway_url)
@@ -206,9 +221,6 @@ jobs:
       - name: Run Integration Tests
         run: |
           echo "🧪 Running integration tests..."
-          
-          # Install test dependencies
-          pip install -r requirements.txt
           
           # Set API URL for integration tests
           export API_BASE_URL="${{ steps.terraform_outputs.outputs.api_url }}"
