@@ -1,0 +1,6 @@
+# Terraform backend configuration for staging
+# Source this file in CI/CD scripts if needed
+export TF_BACKEND_BUCKET="cat-detection-terraform-state-staging-9be2c4ef"
+export TF_BACKEND_KEY="cat-detection/staging/terraform.tfstate"
+export TF_BACKEND_REGION="eu-west-1"
+export TF_BACKEND_DYNAMODB_TABLE="cat-detection-terraform-locks-staging"

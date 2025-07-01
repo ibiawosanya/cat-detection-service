@@ -1,0 +1,212 @@
+name: Destroy Infrastructure
+
+on:
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: 'Environment to destroy'
+        required: true
+        default: 'dev'
+        type: choice
+        options:
+        - dev
+        - staging
+        - prod
+      confirm_destroy:
+        description: 'Type "DESTROY" to confirm infrastructure deletion'
+        required: true
+        type: string
+      force_destroy:
+        description: 'Force destroy even if resources are protected'
+        required: false
+        default: false
+        type: boolean
+
+env:
+  AWS_REGION: eu-west-1
+
+jobs:
+  validate-input:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Validate destroy confirmation
+        run: |
+          if [ "${{ github.event.inputs.confirm_destroy }}" != "DESTROY" ]; then
+            echo "❌ Destroy confirmation failed!"
+            echo "You must type exactly 'DESTROY' to confirm infrastructure deletion"
+            exit 1
+          fi
+          echo "✅ Destroy confirmation validated"
+
+      - name: Environment protection check
+        run: |
+          ENVIRONMENT="${{ github.event.inputs.environment }}"
+          if [ "$ENVIRONMENT" = "prod" ]; then
+            echo "🚨 PRODUCTION ENVIRONMENT DESTRUCTION REQUESTED!"
+            echo "Environment: $ENVIRONMENT"
+            echo "Requested by: ${{ github.actor }}"
+            echo "Force destroy: ${{ github.event.inputs.force_destroy }}"
+            
+            if [ "${{ github.event.inputs.force_destroy }}" != "true" ]; then
+              echo "❌ Production destruction requires force_destroy flag"
+              exit 1
+            fi
+          fi
+
+  destroy-infrastructure:
+    needs: validate-input
+    runs-on: ubuntu-latest
+    environment: ${{ github.event.inputs.environment }}-destroy
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v2
+        with:
+          terraform_version: 1.5.0
+          terraform_wrapper: false
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v3
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Pre-destroy information
+        run: |
+          ENVIRONMENT="${{ github.event.inputs.environment }}"
+          echo "🚨 INFRASTRUCTURE DESTRUCTION"
+          echo "================================"
+          echo "Environment: $ENVIRONMENT"
+          echo "Region: ${{ env.AWS_REGION }}"
+          echo "Initiated by: ${{ github.actor }}"
+          echo "Timestamp: $(date)"
+          echo "================================"
+
+      - name: Terraform Init
+        run: |
+          ENVIRONMENT="${{ github.event.inputs.environment }}"
+          cd terraform/environments/$ENVIRONMENT
+          
+          if [ ! -f "backend.tf" ]; then
+            echo "❌ No backend.tf found for $ENVIRONMENT environment"
+            echo "This environment may not exist or was never deployed"
+            exit 1
+          fi
+          
+          terraform init
+
+      - name: Get current resources
+        run: |
+          ENVIRONMENT="${{ github.event.inputs.environment }}"
+          cd terraform/environments/$ENVIRONMENT
+          
+          echo "📋 Current infrastructure resources:"
+          terraform state list || echo "No resources found"
+
+      - name: Terraform Plan Destroy
+        run: |
+          ENVIRONMENT="${{ github.event.inputs.environment }}"
+          cd terraform/environments/$ENVIRONMENT
+          
+          echo "📝 Planning destruction..."
+          terraform plan -destroy -out=destroy.tfplan
+
+      - name: Terraform Destroy
+        run: |
+          ENVIRONMENT="${{ github.event.inputs.environment }}"
+          cd terraform/environments/$ENVIRONMENT
+          
+          echo "💥 Destroying infrastructure..."
+          terraform apply destroy.tfplan
+
+      - name: Clean up Terraform backend
+        run: |
+          ENVIRONMENT="${{ github.event.inputs.environment }}"
+          
+          # Get backend configuration
+          if [ -f "terraform/environments/$ENVIRONMENT/.terraform-backend-config" ]; then
+            source terraform/environments/$ENVIRONMENT/.terraform-backend-config
+            
+            echo "🧹 Cleaning up Terraform backend..."
+            echo "S3 Bucket: $TF_BACKEND_BUCKET"
+            echo "DynamoDB Table: $TF_BACKEND_DYNAMODB_TABLE"
+            
+            # Empty and delete S3 bucket
+            echo "Emptying S3 bucket..."
+            aws s3 rm s3://$TF_BACKEND_BUCKET --recursive || echo "Bucket already empty"
+            
+            echo "Deleting S3 bucket..."
+            aws s3api delete-bucket --bucket $TF_BACKEND_BUCKET --region $TF_BACKEND_REGION || echo "Bucket already deleted"
+            
+            # Delete DynamoDB table
+            echo "Deleting DynamoDB table..."
+            aws dynamodb delete-table --table-name $TF_BACKEND_DYNAMODB_TABLE --region $TF_BACKEND_REGION || echo "Table already deleted"
+            
+            # Clean up local files
+            rm -f terraform/environments/$ENVIRONMENT/backend.tf
+            rm -f terraform/environments/$ENVIRONMENT/.terraform-backend-config
+            rm -rf terraform/environments/$ENVIRONMENT/.terraform/
+            
+            echo "✅ Backend cleanup completed"
+          else
+            echo "⚠️  No backend config found, skipping backend cleanup"
+          fi
+
+      - name: Verify destruction
+        run: |
+          ENVIRONMENT="${{ github.event.inputs.environment }}"
+          cd terraform/environments/$ENVIRONMENT
+          
+          echo "🔍 Verifying destruction..."
+          
+          # Try to list resources (should be empty)
+          REMAINING_RESOURCES=$(terraform state list 2>/dev/null | wc -l)
+          
+          if [ "$REMAINING_RESOURCES" -eq 0 ]; then
+            echo "✅ All Terraform resources destroyed successfully"
+          else
+            echo "⚠️  Some resources may still exist:"
+            terraform state list
+          fi
+
+      - name: Destruction summary
+        run: |
+          ENVIRONMENT="${{ github.event.inputs.environment }}"
+          echo ""
+          echo "🎯 DESTRUCTION SUMMARY"
+          echo "======================"
+          echo "Environment: $ENVIRONMENT"
+          echo "Destroyed by: ${{ github.actor }}"
+          echo "Timestamp: $(date)"
+          echo "Status: ✅ COMPLETED"
+          echo ""
+          echo "📋 What was destroyed:"
+          echo "• All Terraform-managed resources"
+          echo "• S3 backend bucket and state files"
+          echo "• DynamoDB state lock table"
+          echo "• Local Terraform configuration files"
+          echo ""
+          echo "♻️  Environment can be recreated by:"
+          echo "   1. Running the bootstrap script"
+          echo "   2. Deploying via normal CI/CD pipeline"
+
+  notify-destruction:
+    needs: destroy-infrastructure
+    runs-on: ubuntu-latest
+    if: always()
+    steps:
+      - name: Destruction notification
+        run: |
+          ENVIRONMENT="${{ github.event.inputs.environment }}"
+          if [ "${{ needs.destroy-infrastructure.result }}" = "success" ]; then
+            echo "✅ $ENVIRONMENT environment destroyed successfully"
+            echo "Initiated by: ${{ github.actor }}"
+            echo "All resources have been cleaned up"
+          else
+            echo "❌ $ENVIRONMENT environment destruction failed"
+            echo "Please check the logs and clean up manually if needed"
+          fi
