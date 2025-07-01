@@ -218,6 +218,9 @@ jobs:
           echo "🌐 Web UI available at: $WEB_URL"
           echo "🔗 API available at: $API_URL"
 
+      - name: Install pytest
+        run: pip install pytest requests
+
       - name: Run Integration Tests
         run: |
           echo "🧪 Running integration tests..."

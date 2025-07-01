@@ -216,6 +216,9 @@ jobs:
           echo "🌐 Staging Web UI available at: $WEB_URL"
           echo "🔗 Staging API available at: $API_URL"
 
+      - name: Install pytest
+        run: pip install pytest requests
+
       - name: Run Staging Integration Tests
         run: |
           echo "🧪 Running staging integration tests..."
