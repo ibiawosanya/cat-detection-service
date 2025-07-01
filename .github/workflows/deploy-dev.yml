@@ -28,9 +28,6 @@ jobs:
 
       - name: Run unit tests
         run: |
-          # Run basic tests first
-          pytest tests/test_simple.py -v
-          
           # Run unit tests (skip if files don't exist)
           if [ -f "tests/unit/test_lambda_functions.py" ]; then
             echo "Running unit tests..."

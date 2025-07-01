@@ -10,18 +10,19 @@ from PIL import Image
 API_BASE_URL = os.getenv('API_BASE_URL', 'https://gculxuhkz2.execute-api.eu-west-1.amazonaws.com/dev')
 
 
+@pytest.fixture
+def sample_image_base64():
+    """Create a small test image and convert to base64"""
+    # Create a small 10x10 red image for testing
+    img = Image.new('RGB', (10, 10), color='red')
+    buffer = BytesIO()
+    img.save(buffer, format='JPEG')
+    img_data = buffer.getvalue()
+    return base64.b64encode(img_data).decode('utf-8')
+
+
 class TestCatDetectionAPI:
     """Integration tests for the Cat Detection API"""
-    
-    @pytest.fixture
-    def sample_image_base64(self):
-        """Create a small test image and convert to base64"""
-        # Create a small 10x10 red image for testing
-        img = Image.new('RGB', (10, 10), color='red')
-        buffer = BytesIO()
-        img.save(buffer, format='JPEG')
-        img_data = buffer.getvalue()
-        return base64.b64encode(img_data).decode('utf-8')
     
     def test_upload_valid_image(self, sample_image_base64):
         """Test uploading a valid image to the API"""
@@ -38,8 +39,7 @@ class TestCatDetectionAPI:
         assert 'scan_id' in data
         assert 'status' in data
         assert data['status'] == 'PENDING'
-        
-        return data['scan_id']  # Return for potential use in other tests
+        # Don't return anything - just assert
     
     def test_upload_invalid_content_type(self, sample_image_base64):
         """Test uploading with invalid content type"""
