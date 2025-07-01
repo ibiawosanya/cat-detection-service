@@ -36,8 +36,58 @@ jobs:
             echo "No unit tests found, skipping..."
           fi
 
+  security:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.11'
+
+      - name: Install security tools
+        run: |
+          pip install bandit safety
+
+      - name: Run security scans
+        run: |
+          echo "🔒 Running security scans..."
+          
+          # Scan Python code for security issues
+          echo "📊 Scanning Python code with Bandit..."
+          bandit -r src/ -f json -o bandit-report.json || true
+          bandit -r src/ || echo "⚠️  Security issues found, but continuing..."
+          
+          # Check for known security vulnerabilities in dependencies
+          echo "🔍 Checking dependencies with Safety..."
+          safety check --json --output safety-report.json || true
+          safety check || echo "⚠️  Vulnerable dependencies found, but continuing..."
+          
+          echo "✅ Security scans completed"
+
+      - name: Upload security reports
+        uses: actions/upload-artifact@v3
+        if: always()
+        with:
+          name: security-reports
+          path: |
+            bandit-report.json
+            safety-report.json
+
+      - name: Install TFSec
+        run: |
+          curl -s https://raw.githubusercontent.com/aquasecurity/tfsec/master/scripts/install_linux.sh | bash
+
+      - name: Run Terraform security scan
+        run: |
+          echo "🏗️  Scanning Terraform with TFSec..."
+          tfsec terraform/ --format json --out tfsec-report.json || true
+          tfsec terraform/ || echo "⚠️  Terraform security issues found, but continuing..."
+
   build-and-deploy:
-    needs: test
+    needs: [test, security]  # Added security dependency
     runs-on: ubuntu-latest
     if: github.event_name == 'push'
     
