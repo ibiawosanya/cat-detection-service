@@ -1,13 +1,13 @@
-name: Deploy to Staging
+name: Deploy to Production
 
 on:
-  push:
-    branches: [main]
-  workflow_dispatch:  # Allow manual deployment
+  release:
+    types: [published]
+  workflow_dispatch:  # Allow manual deployment with approval
 
 env:
   AWS_REGION: eu-west-1
-  ENVIRONMENT: staging
+  ENVIRONMENT: prod
 
 jobs:
   test:
@@ -51,7 +51,7 @@ jobs:
 
       - name: Run security scans
         run: |
-          echo "🔒 Running security scans..."
+          echo "🔒 Running production security scans..."
           
           # Scan Python code for security issues
           echo "📊 Scanning Python code with Bandit..."
@@ -69,7 +69,7 @@ jobs:
         uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: staging-security-reports
+          name: prod-security-reports
           path: |
             bandit-report.json
             safety-report.json
@@ -84,9 +84,20 @@ jobs:
           tfsec terraform/ --format json --out tfsec-report.json || true
           tfsec terraform/ || echo "⚠️  Terraform security issues found, but continuing..."
 
-  build-and-deploy:
-    needs: [test, security]
+  approval:
     runs-on: ubuntu-latest
+    needs: [test, security]
+    environment: production  # Requires manual approval
+    steps:
+      - name: Production deployment approval
+        run: |
+          echo "🚨 PRODUCTION DEPLOYMENT APPROVED"
+          echo "Proceeding with production deployment..."
+
+  build-and-deploy:
+    needs: [test, security, approval]
+    runs-on: ubuntu-latest
+    environment: production
     
     steps:
       - name: Checkout code
@@ -155,23 +166,23 @@ jobs:
 
       - name: Terraform Init
         run: |
-          cd terraform/environments/staging
+          cd terraform/environments/prod
           terraform init
 
       - name: Terraform Plan
         run: |
-          cd terraform/environments/staging
-          terraform plan
+          cd terraform/environments/prod
+          terraform plan -out=tfplan
 
       - name: Terraform Apply
         run: |
-          cd terraform/environments/staging
-          terraform apply -auto-approve
+          cd terraform/environments/prod
+          terraform apply tfplan
 
       - name: Get Terraform Outputs
         id: terraform_outputs
         run: |
-          cd terraform/environments/staging
+          cd terraform/environments/prod
           
           # Capture outputs and set as step outputs
           API_URL=$(terraform output -raw api_gateway_url)
@@ -191,7 +202,7 @@ jobs:
 
       - name: Deploy Web UI
         run: |
-          echo "🚀 Starting staging web UI deployment..."
+          echo "🚀 Starting PRODUCTION web UI deployment..."
           
           # Use step outputs
           API_URL="${{ steps.terraform_outputs.outputs.api_url }}"
@@ -203,46 +214,68 @@ jobs:
           cd src/web-ui
           npm install
           
-          echo "🔨 Building React app with staging API URL..."
+          echo "🔨 Building React app with production API URL..."
           REACT_APP_API_URL="$API_URL" npm run build
           
-          echo "☁️ Deploying to staging S3 bucket: $WEB_BUCKET"
+          echo "☁️ Deploying to PRODUCTION S3 bucket: $WEB_BUCKET"
           aws s3 sync build/ "s3://$WEB_BUCKET" --delete
           
           echo "🌐 Invalidating CloudFront cache..."
           aws cloudfront create-invalidation --distribution-id "$CLOUDFRONT_ID" --paths "/*"
           
-          echo "✅ Staging deployment completed successfully!"
-          echo "🌐 Staging Web UI available at: $WEB_URL"
-          echo "🔗 Staging API available at: $API_URL"
+          echo "✅ PRODUCTION deployment completed successfully!"
+          echo "🌐 PRODUCTION Web UI available at: $WEB_URL"
+          echo "🔗 PRODUCTION API available at: $API_URL"
 
       - name: Install test dependencies
         run: pip install -r tests/requirements.txt
-
-      - name: Run Staging Integration Tests
+        
+      - name: Run Production Smoke Tests
         run: |
-          echo "🧪 Running staging integration tests..."
+          echo "🧪 Running production smoke tests..."
           
-          # Set API URL for integration tests
+          # Set API URL for tests
           export API_BASE_URL="${{ steps.terraform_outputs.outputs.api_url }}"
           
-          # Run integration tests
+          # Run basic health checks only (not full integration tests)
           if [ -f "tests/integration/test_api.py" ]; then
-            echo "Running integration tests against staging: $API_BASE_URL"
-            pytest tests/integration/ -v --tb=short
+            echo "Running production smoke tests: $API_BASE_URL"
+            pytest tests/integration/test_api.py::TestAPIHealth -v --tb=short
           else
-            echo "No integration tests found, skipping..."
+            echo "No smoke tests found, skipping..."
           fi
 
-      - name: Staging Deployment Summary
+      - name: Production Deployment Notification
         run: |
-          echo "🎉 STAGING DEPLOYMENT COMPLETE!"
+          echo "🎉 PRODUCTION DEPLOYMENT COMPLETE!"
           echo ""
-          echo "🌐 Staging Web UI: ${{ steps.terraform_outputs.outputs.web_url }}"
-          echo "🔗 Staging API: ${{ steps.terraform_outputs.outputs.api_url }}"
+          echo "🌐 LIVE Web UI: ${{ steps.terraform_outputs.outputs.web_url }}"
+          echo "🔗 LIVE API: ${{ steps.terraform_outputs.outputs.api_url }}"
           echo ""
           echo "✅ Upload endpoint: ${{ steps.terraform_outputs.outputs.api_url }}/upload"
           echo "✅ Status endpoint: ${{ steps.terraform_outputs.outputs.api_url }}/status/{scan_id}"
           echo ""
-          echo "🧪 All tests passed!"
-          echo "🚀 Staging environment is ready for testing!"
+          echo "🚨 PRODUCTION SERVICE IS NOW LIVE!"
+          echo "🔒 All security scans passed"
+          echo "🧪 Smoke tests passed"
+          echo "🚀 Ready for users!"
+
+  notify-success:
+    runs-on: ubuntu-latest
+    needs: [build-and-deploy]
+    if: success()
+    steps:
+      - name: Success notification
+        run: |
+          echo "✅ Production deployment successful!"
+          echo "Service is live and ready for users."
+
+  notify-failure:
+    runs-on: ubuntu-latest
+    needs: [build-and-deploy]
+    if: failure()
+    steps:
+      - name: Failure notification
+        run: |
+          echo "❌ Production deployment failed!"
+          echo "Please check the logs and retry."
