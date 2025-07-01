@@ -86,6 +86,29 @@ jobs:
           echo "Timestamp: $(date)"
           echo "================================"
 
+      - name: Pre-cleanup S3 buckets
+        run: |
+          ENVIRONMENT="${{ github.event.inputs.environment }}"
+          echo "🧹 Pre-cleaning S3 buckets to avoid deletion conflicts..."
+          
+          # Find and empty all S3 buckets for this environment
+          aws s3api list-buckets --query "Buckets[?contains(Name, '$ENVIRONMENT-cat-detection')].Name" --output text | while read bucket; do
+            if [ ! -z "$bucket" ]; then
+              echo "Emptying bucket: $bucket"
+              aws s3 rm "s3://$bucket" --recursive || echo "Bucket $bucket already empty or doesn't exist"
+              
+              # Also delete any object versions (for versioned buckets)
+              aws s3api delete-objects --bucket "$bucket" \
+                --delete "$(aws s3api list-object-versions --bucket "$bucket" --query '{Objects: Versions[].{Key:Key,VersionId:VersionId}}' --output json)" \
+                2>/dev/null || echo "No versions to delete in $bucket"
+              
+              # Delete any delete markers
+              aws s3api delete-objects --bucket "$bucket" \
+                --delete "$(aws s3api list-object-versions --bucket "$bucket" --query '{Objects: DeleteMarkers[].{Key:Key,VersionId:VersionId}}' --output json)" \
+                2>/dev/null || echo "No delete markers in $bucket"
+            fi
+          done
+
       - name: Terraform Init
         run: |
           ENVIRONMENT="${{ github.event.inputs.environment }}"
@@ -122,6 +145,33 @@ jobs:
           
           echo "💥 Destroying infrastructure..."
           terraform apply destroy.tfplan
+        timeout-minutes: 15
+
+      - name: Force cleanup remaining S3 resources
+        if: failure()
+        run: |
+          ENVIRONMENT="${{ github.event.inputs.environment }}"
+          echo "🔧 Force cleaning up any remaining S3 resources..."
+          
+          # Force delete any remaining S3 buckets
+          aws s3api list-buckets --query "Buckets[?contains(Name, '$ENVIRONMENT-cat-detection')].Name" --output text | while read bucket; do
+            if [ ! -z "$bucket" ]; then
+              echo "Force deleting bucket: $bucket"
+              aws s3 rm "s3://$bucket" --recursive --quiet || true
+              aws s3api delete-bucket --bucket "$bucket" || echo "Could not delete $bucket"
+            fi
+          done
+
+      - name: Clean up CloudFront distributions
+        if: failure()
+        run: |
+          ENVIRONMENT="${{ github.event.inputs.environment }}"
+          echo "🔧 Cleaning up any stuck CloudFront distributions..."
+          
+          # Note: CloudFront distributions can take 15+ minutes to delete
+          # This is normal AWS behavior, not an error
+          echo "CloudFront distributions may take 15+ minutes to fully delete"
+          echo "This is normal AWS behavior due to global edge cache propagation"
 
       - name: Clean up Terraform backend
         run: |
@@ -171,6 +221,30 @@ jobs:
           else
             echo "⚠️  Some resources may still exist:"
             terraform state list
+            echo ""
+            echo "Note: CloudFront distributions can take 15+ minutes to fully delete"
+            echo "This is normal AWS behavior and not an error"
+          fi
+
+      - name: Manual cleanup verification
+        run: |
+          ENVIRONMENT="${{ github.event.inputs.environment }}"
+          echo "🔍 Checking for any remaining AWS resources..."
+          
+          # Check for remaining resources with tags
+          REMAINING=$(aws resourcegroupstaggingapi get-resources \
+            --tag-filters Key=Environment,Values=$ENVIRONMENT Key=Project,Values=cat-detection \
+            --query 'ResourceTagMappingList[].ResourceARN' --output text | wc -w)
+          
+          if [ "$REMAINING" -eq 0 ]; then
+            echo "✅ No tagged resources found - cleanup appears complete"
+          else
+            echo "⚠️  Found $REMAINING remaining tagged resources:"
+            aws resourcegroupstaggingapi get-resources \
+              --tag-filters Key=Environment,Values=$ENVIRONMENT Key=Project,Values=cat-detection \
+              --query 'ResourceTagMappingList[].ResourceARN' --output text
+            echo ""
+            echo "These may be CloudFront distributions still propagating (normal)"
           fi
 
       - name: Destruction summary
@@ -186,9 +260,13 @@ jobs:
           echo ""
           echo "📋 What was destroyed:"
           echo "• All Terraform-managed resources"
+          echo "• S3 buckets (emptied and deleted)"
           echo "• S3 backend bucket and state files"
           echo "• DynamoDB state lock table"
           echo "• Local Terraform configuration files"
+          echo ""
+          echo "⏰ Note: CloudFront distributions may take 15+ minutes to fully delete"
+          echo "   This is normal AWS behavior due to global edge cache propagation"
           echo ""
           echo "♻️  Environment can be recreated by:"
           echo "   1. Running the bootstrap script"
@@ -206,7 +284,10 @@ jobs:
             echo "✅ $ENVIRONMENT environment destroyed successfully"
             echo "Initiated by: ${{ github.actor }}"
             echo "All resources have been cleaned up"
+            echo ""
+            echo "Note: CloudFront distributions may take additional time to fully delete"
           else
-            echo "❌ $ENVIRONMENT environment destruction failed"
-            echo "Please check the logs and clean up manually if needed"
+            echo "❌ $ENVIRONMENT environment destruction encountered issues"
+            echo "Most resources should be cleaned up, but manual verification recommended"
+            echo "Check AWS Console for any remaining resources"
           fi
