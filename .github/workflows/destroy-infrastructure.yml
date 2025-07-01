@@ -86,55 +86,6 @@ jobs:
           echo "Timestamp: $(date)"
           echo "================================"
 
-      - name: Pre-cleanup S3 buckets
-        run: |
-          ENVIRONMENT="${{ github.event.inputs.environment }}"
-          echo "🧹 Pre-cleaning S3 buckets to avoid deletion conflicts..."
-          
-          # Get current Terraform state to find the actual bucket names
-          cd terraform/environments/$ENVIRONMENT
-          
-          # Extract S3 bucket names from Terraform state
-          S3_BUCKETS=$(terraform state list | grep aws_s3_bucket | grep -v aws_s3_bucket_policy | grep -v aws_s3_bucket_public_access_block | grep -v aws_s3_bucket_website_configuration | grep -v aws_s3_bucket_server_side_encryption_configuration | grep -v aws_s3_bucket_versioning)
-          
-          for bucket_resource in $S3_BUCKETS; do
-            # Get the actual bucket name from Terraform state
-            BUCKET_NAME=$(terraform state show "$bucket_resource" | grep -E "bucket\s*=" | head -1 | sed 's/.*= "//' | sed 's/"//')
-            
-            if [ ! -z "$BUCKET_NAME" ]; then
-              echo "🪣 Cleaning bucket: $BUCKET_NAME"
-              
-              # Empty the bucket completely
-              echo "  Removing all objects..."
-              aws s3 rm "s3://$BUCKET_NAME" --recursive --quiet || echo "  Bucket already empty or error occurred"
-              
-              # Handle versioned objects if any
-              echo "  Removing object versions..."
-              aws s3api list-object-versions --bucket "$BUCKET_NAME" --output json --query 'Versions[].{Key:Key,VersionId:VersionId}' 2>/dev/null | \
-              jq -r '.[] | select(.Key != null) | "\(.Key) \(.VersionId)"' 2>/dev/null | \
-              while read key version; do
-                if [ ! -z "$key" ] && [ ! -z "$version" ]; then
-                  aws s3api delete-object --bucket "$BUCKET_NAME" --key "$key" --version-id "$version" --quiet 2>/dev/null || true
-                fi
-              done || echo "  No versions to delete or jq not available"
-              
-              # Handle delete markers
-              echo "  Removing delete markers..."
-              aws s3api list-object-versions --bucket "$BUCKET_NAME" --output json --query 'DeleteMarkers[].{Key:Key,VersionId:VersionId}' 2>/dev/null | \
-              jq -r '.[] | select(.Key != null) | "\(.Key) \(.VersionId)"' 2>/dev/null | \
-              while read key version; do
-                if [ ! -z "$key" ] && [ ! -z "$version" ]; then
-                  aws s3api delete-object --bucket "$BUCKET_NAME" --key "$key" --version-id "$version" --quiet 2>/dev/null || true
-                fi
-              done || echo "  No delete markers or jq not available"
-              
-              echo "  ✅ Bucket $BUCKET_NAME cleaned"
-            fi
-          done
-          
-          # Go back to root
-          cd ../../..
-
       - name: Terraform Init
         run: |
           ENVIRONMENT="${{ github.event.inputs.environment }}"
@@ -147,6 +98,67 @@ jobs:
           fi
           
           terraform init
+
+      - name: Pre-cleanup S3 buckets
+        run: |
+          ENVIRONMENT="${{ github.event.inputs.environment }}"
+          echo "🧹 Pre-cleaning S3 buckets to avoid deletion conflicts..."
+          
+          # Get current Terraform state to find the actual bucket names
+          cd terraform/environments/$ENVIRONMENT
+          
+          # Extract S3 bucket names from Terraform state (simplified approach)
+          echo "🔍 Finding S3 buckets in Terraform state..."
+          S3_BUCKETS=$(terraform state list | grep "aws_s3_bucket\." | grep -v "aws_s3_bucket_")
+          
+          if [ -z "$S3_BUCKETS" ]; then
+            echo "No S3 buckets found in Terraform state"
+          else
+            for bucket_resource in $S3_BUCKETS; do
+              echo "📋 Processing: $bucket_resource"
+              
+              # Get the actual bucket name from Terraform state
+              BUCKET_NAME=$(terraform state show "$bucket_resource" 2>/dev/null | grep -E "^\s*bucket\s*=" | head -1 | awk -F'"' '{print $2}')
+              
+              if [ ! -z "$BUCKET_NAME" ]; then
+                echo "🪣 Cleaning bucket: $BUCKET_NAME"
+                
+                # Check if bucket exists
+                if aws s3api head-bucket --bucket "$BUCKET_NAME" 2>/dev/null; then
+                  # Empty the bucket completely
+                  echo "  Removing all objects..."
+                  aws s3 rm "s3://$BUCKET_NAME" --recursive --quiet 2>/dev/null || echo "  No objects to remove"
+                  
+                  # Handle versioned objects - simpler approach
+                  echo "  Removing object versions (if any)..."
+                  aws s3api list-object-versions --bucket "$BUCKET_NAME" --output text --query 'Versions[*].[Key,VersionId]' 2>/dev/null | \
+                  while read key version; do
+                    if [ ! -z "$key" ] && [ ! -z "$version" ] && [ "$key" != "None" ] && [ "$version" != "None" ]; then
+                      aws s3api delete-object --bucket "$BUCKET_NAME" --key "$key" --version-id "$version" --quiet 2>/dev/null || true
+                    fi
+                  done
+                  
+                  # Handle delete markers - simpler approach
+                  echo "  Removing delete markers (if any)..."
+                  aws s3api list-object-versions --bucket "$BUCKET_NAME" --output text --query 'DeleteMarkers[*].[Key,VersionId]' 2>/dev/null | \
+                  while read key version; do
+                    if [ ! -z "$key" ] && [ ! -z "$version" ] && [ "$key" != "None" ] && [ "$version" != "None" ]; then
+                      aws s3api delete-object --bucket "$BUCKET_NAME" --key "$key" --version-id "$version" --quiet 2>/dev/null || true
+                    fi
+                  done
+                  
+                  echo "  ✅ Bucket $BUCKET_NAME cleaned"
+                else
+                  echo "  ⚠️  Bucket $BUCKET_NAME does not exist or is not accessible"
+                fi
+              else
+                echo "  ❌ Could not extract bucket name from $bucket_resource"
+              fi
+            done
+          fi
+          
+          # Go back to root
+          cd ../../..
 
       - name: Get current resources
         run: |
