@@ -55,12 +55,12 @@ jobs:
           
           # Strict security scanning for production
           echo "📊 Scanning Python code with Bandit (strict mode)..."
-          bandit -r src/ -f json -o bandit-report.json
+          bandit -r src/ -f json -o bandit-report.json || echo "Bandit JSON report generated"
           bandit -r src/ --severity-level medium
           
           # Check for known security vulnerabilities in dependencies
           echo "🔍 Checking dependencies with Safety (strict mode)..."
-          safety check --json --output safety-report.json
+          safety check --output json > safety-report.json || echo "Safety JSON report generated"
           safety check
           
           echo "✅ Enhanced security scans completed"
@@ -81,7 +81,7 @@ jobs:
       - name: Run Terraform security scan
         run: |
           echo "🏗️  Scanning Terraform with TFSec (strict mode)..."
-          tfsec terraform/ --format json --out tfsec-report.json
+          tfsec terraform/ --format json --out tfsec-report.json || echo "TFSec JSON report generated"
           tfsec terraform/
 
   approval:
