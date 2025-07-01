@@ -10,7 +10,7 @@ s3 = boto3.client('s3')
 sqs = boto3.client('sqs')
 dynamodb = boto3.resource('dynamodb')
 
-# Environment variables
+# Environment variables - MUST match your Terraform configuration
 IMAGES_BUCKET = os.environ['IMAGES_BUCKET']
 PROCESSING_QUEUE_URL = os.environ['PROCESSING_QUEUE_URL']
 RESULTS_TABLE = os.environ['RESULTS_TABLE']
@@ -37,17 +37,36 @@ def lambda_handler(event, context):
                 'body': json.dumps({'message': 'CORS preflight'})
             }
         
-        # Parse the request body
+        print(f"Received upload request: {event['httpMethod']}")
+        
+        # Parse the request body - handle both base64 and direct upload
         if event.get('isBase64Encoded', False):
             import base64
             body = base64.b64decode(event['body'])
             content_type = event['headers'].get('content-type', event['headers'].get('Content-Type', ''))
         else:
-            return {
-                'statusCode': 400,
-                'headers': cors_headers,
-                'body': json.dumps({'error': 'Request body must be base64 encoded'})
-            }
+            # Try to parse JSON body (for testing)
+            try:
+                json_body = json.loads(event['body'])
+                if 'image_data' in json_body:
+                    # Base64 encoded image in JSON
+                    import base64
+                    body = base64.b64decode(json_body['image_data'])
+                    content_type = json_body.get('content_type', 'image/jpeg')
+                else:
+                    return {
+                        'statusCode': 400,
+                        'headers': cors_headers,
+                        'body': json.dumps({'error': 'image_data field required in JSON body'})
+                    }
+            except:
+                return {
+                    'statusCode': 400,
+                    'headers': cors_headers,
+                    'body': json.dumps({'error': 'Invalid request format'})
+                }
+        
+        print(f"Content type: {content_type}, Body size: {len(body)}")
         
         # Validate content type
         allowed_types = ['image/jpeg', 'image/jpg', 'image/png']
@@ -65,6 +84,8 @@ def lambda_handler(event, context):
         file_extension = 'jpg' if content_type in ['image/jpeg', 'image/jpg'] else 'png'
         image_key = f"uploads/{scan_id}.{file_extension}"
         
+        print(f"Generated scan_id: {scan_id}, image_key: {image_key}")
+        
         # Upload image to S3
         s3.put_object(
             Bucket=IMAGES_BUCKET,
@@ -72,18 +93,18 @@ def lambda_handler(event, context):
             Body=body,
             ContentType=content_type
         )
+        print(f"Uploaded to S3: s3://{IMAGES_BUCKET}/{image_key}")
         
         # Create initial record in DynamoDB (with Decimal types)
         table = dynamodb.Table(RESULTS_TABLE)
         
-        # Convert any numeric values to Decimal for DynamoDB
         timestamp = datetime.utcnow().isoformat()
         file_size_decimal = Decimal(str(len(body)))  # Convert file size to Decimal
         
         initial_record = {
             'scan_id': scan_id,
             'image_key': image_key,
-            'status': 'QUEUED',
+            'status': 'PENDING',  # Changed from QUEUED to PENDING for consistency
             'file_size': file_size_decimal,
             'content_type': content_type,
             'created_at': timestamp,
@@ -91,6 +112,7 @@ def lambda_handler(event, context):
         }
         
         table.put_item(Item=initial_record)
+        print(f"Created DynamoDB record for scan_id: {scan_id}")
         
         # Send message to SQS for processing
         message_body = {
@@ -103,8 +125,7 @@ def lambda_handler(event, context):
             QueueUrl=PROCESSING_QUEUE_URL,
             MessageBody=json.dumps(message_body)
         )
-        
-        print(f"Successfully uploaded image {image_key} with scan ID {scan_id}")
+        print(f"Sent SQS message for scan_id: {scan_id}")
         
         return {
             'statusCode': 200,
@@ -112,12 +133,15 @@ def lambda_handler(event, context):
             'body': json.dumps({
                 'scan_id': scan_id,
                 'message': 'Image uploaded successfully and queued for processing',
-                'image_key': image_key
+                'image_key': image_key,
+                'status': 'PENDING'
             })
         }
         
     except Exception as e:
         print(f"Error in upload handler: {str(e)}")
+        import traceback
+        print(traceback.format_exc())
         return {
             'statusCode': 500,
             'headers': cors_headers,

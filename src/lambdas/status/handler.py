@@ -6,7 +6,7 @@ from decimal import Decimal
 # Initialize AWS clients
 dynamodb = boto3.resource('dynamodb')
 
-# Environment variables
+# Environment variables - MUST match your Terraform configuration
 RESULTS_TABLE = os.environ['RESULTS_TABLE']
 
 def lambda_handler(event, context):
@@ -31,7 +31,9 @@ def lambda_handler(event, context):
             }
         
         # Extract scan_id from path parameters
-        scan_id = event['pathParameters']['scan_id']
+        # Handle both 'scan_id' and 'id' for compatibility
+        path_params = event.get('pathParameters') or {}
+        scan_id = path_params.get('scan_id') or path_params.get('id')
         
         if not scan_id:
             return {
@@ -39,6 +41,8 @@ def lambda_handler(event, context):
                 'headers': cors_headers,
                 'body': json.dumps({'error': 'scan_id is required'})
             }
+        
+        print(f"Looking up scan_id: {scan_id}")
         
         # Check for debug mode
         query_params = event.get('queryStringParameters') or {}
@@ -59,6 +63,7 @@ def lambda_handler(event, context):
             }
         
         item = response['Item']
+        print(f"Found item with status: {item.get('status')}")
         
         # Convert Decimal types back to float/int for JSON serialization
         def decimal_to_number(obj):
@@ -79,48 +84,31 @@ def lambda_handler(event, context):
         # Convert all Decimal types in the item
         item = decimal_to_number(item)
         
-        # Prepare the response based on debug mode
-        if debug_mode:
-            # Return full details including debug data
-            result = {
-                'scan_id': item['scan_id'],
-                'status': item['status'],
-                'image_key': item.get('image_key'),
-                'created_at': item.get('created_at'),
-                'updated_at': item.get('updated_at')
-            }
+        # Prepare the response based on status and debug mode
+        result = {
+            'scan_id': item['scan_id'],
+            'status': item['status'],
+            'created_at': item.get('created_at'),
+            'updated_at': item.get('updated_at')
+        }
+        
+        # Add error message if present
+        if 'error_message' in item:
+            result['error_message'] = item['error_message']
+        
+        # Add results if completed
+        if item['status'] == 'COMPLETED':
+            # Use the field names that match the process lambda output
+            result.update({
+                'cats_found': item.get('cats_found', False),
+                'cat_count': item.get('cat_count', 0),
+                'highest_confidence': item.get('highest_confidence', 0),
+                'total_labels': item.get('total_labels', 0)
+            })
             
-            # Add error message if present
-            if 'error_message' in item:
-                result['error_message'] = item['error_message']
-            
-            # Add results if completed
-            if item['status'] == 'COMPLETED':
-                result.update({
-                    'cats_found': item.get('cats_found', False),
-                    'cat_count': item.get('cat_count', 0),
-                    'highest_confidence': item.get('highest_confidence', 0),
-                    'total_labels': item.get('total_labels', 0),
-                    'debug_data': item.get('debug_data', {})
-                })
-        else:
-            # Return minimal information for normal mode
-            result = {
-                'scan_id': item['scan_id'],
-                'status': item['status']
-            }
-            
-            # Add error message if present
-            if 'error_message' in item:
-                result['error_message'] = item['error_message']
-            
-            # Add basic results if completed
-            if item['status'] == 'COMPLETED':
-                result.update({
-                    'cats_found': item.get('cats_found', False),
-                    'cat_count': item.get('cat_count', 0),
-                    'highest_confidence': item.get('highest_confidence', 0)
-                })
+            # Add debug data if requested
+            if debug_mode and 'debug_data' in item:
+                result['debug_data'] = item['debug_data']
         
         return {
             'statusCode': 200,
@@ -130,6 +118,8 @@ def lambda_handler(event, context):
         
     except Exception as e:
         print(f"Error in status handler: {str(e)}")
+        import traceback
+        print(traceback.format_exc())
         return {
             'statusCode': 500,
             'headers': cors_headers,
