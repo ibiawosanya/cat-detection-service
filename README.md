@@ -62,33 +62,59 @@ This project implements a cloud-native, serverless cat detection service that al
 
 ## 🚀 Live Demo
 
-### Development Environment
-- **Web UI**: https://d1frt8mu4yn6nr.cloudfront.net
-- **API Base URL**: https://ci1eovz6lk.execute-api.eu-west-1.amazonaws.com/dev
+### Try It Now!
+**🌐 Web Interface**: https://d1frt8mu4yn6nr.cloudfront.net
 
-### API Endpoints
+### How to Use:
+1. **Visit the web interface** → https://d1frt8mu4yn6nr.cloudfront.net
+2. **Select an image** → Choose any JPEG or PNG file containing cats (or not!)
+3. **Upload & Scan** → Click the upload button and wait for processing
+4. **View Results** → See if cats were detected with confidence scores
+5. **Enable Debug Mode** → Toggle "Show Debug Data" for detailed analysis
+
+### API Endpoints (For Developers)
+**Base URL**: https://ci1eovz6lk.execute-api.eu-west-1.amazonaws.com/dev
+
 ```bash
-# Upload an image
+# Upload an image (Base64 JSON format)
 POST /upload
-Content-Type: multipart/form-data
-Body: image file (JPEG/PNG)
+Content-Type: application/json
+{
+  "image_data": "base64-encoded-image-data",
+  "content_type": "image/jpeg",
+  "user_id": "your-user-id"
+}
 
 # Check scan status
 GET /status/{scan_id}?debug=true  # Optional debug parameter
 ```
 
-### Example Usage
-```bash
+### Example API Usage (Advanced Users)
+```python
+import requests
+import base64
+
+# Encode your image
+with open('cat.jpg', 'rb') as f:
+    image_data = base64.b64encode(f.read()).decode('utf-8')
+
 # Upload image
-curl -X POST \
-  https://ci1eovz6lk.execute-api.eu-west-1.amazonaws.com/dev/upload \
-  -H 'Content-Type: multipart/form-data' \
-  -F 'image=@cat.jpg'
+response = requests.post(
+    'https://ci1eovz6lk.execute-api.eu-west-1.amazonaws.com/dev/upload',
+    json={
+        "image_data": image_data,
+        "content_type": "image/jpeg", 
+        "user_id": "demo-user"
+    }
+)
 
-# Response: {"scan_id": "uuid-string"}
+scan_id = response.json()['scan_id']
 
-# Check results
-curl https://ci1eovz6lk.execute-api.eu-west-1.amazonaws.com/dev/status/uuid-string?debug=true
+# Check results with debug data
+status = requests.get(
+    f'https://ci1eovz6lk.execute-api.eu-west-1.amazonaws.com/dev/status/{scan_id}?debug=true'
+)
+print(status.json())
 ```
 
 ## 🛠️ Technology Stack
@@ -277,17 +303,19 @@ curl $API_BASE_URL/status/scan-id-here?debug=true
 ## 💰 Cost Optimization
 
 ### Current Cost Estimate (Development)
-- **Monthly**: ~$6-10 for light usage
+- **Monthly**: ~£4-8 for light usage
 - **Pay-per-use**: Costs scale with actual usage
 - **Free tier**: Leverages AWS free tier where possible
 
-### Cost Breakdown
-- Lambda: $0.50/month (estimated)
-- API Gateway: $0.10/month
-- S3: $1.00/month (storage + requests)
-- DynamoDB: $0.25/month (on-demand)
-- CloudWatch: $2.00/month (logs + metrics)
-- Other services: $2.15/month
+### Cost Breakdown (GBP)
+- Lambda: £0.40/month (estimated)
+- API Gateway: £0.08/month
+- S3: £0.80/month (storage + requests)
+- DynamoDB: £0.20/month (on-demand)
+- CloudWatch: £1.60/month (logs + metrics)
+- Other services: £1.72/month
+
+*Costs calculated at current GBP/USD exchange rates and may vary based on actual usage patterns.*
 
 ## 🚀 Production Readiness
 
