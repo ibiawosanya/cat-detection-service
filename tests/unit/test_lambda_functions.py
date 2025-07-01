@@ -8,15 +8,27 @@ import sys
 import os
 sys.path.append(os.path.join(os.path.dirname(__file__), '../../src/lambdas/process'))
 
-# We'll test the functions by importing them
+# Improved cat detection function with better logic
 def is_cat_related(label_name):
-    """Check if a label is cat-related."""
+    """Check if a label is cat-related with improved logic."""
     cat_keywords = [
         'cat', 'kitten', 'feline', 'tabby', 'siamese', 
         'persian', 'maine coon', 'ragdoll', 'british shorthair'
     ]
     
+    # Words that contain "cat" but are NOT cats
+    non_cat_words = [
+        'cattle', 'catch', 'category', 'catalog', 'caterpillar', 
+        'scatter', 'locate', 'education', 'vacation', 'delicate'
+    ]
+    
     label_lower = label_name.lower()
+    
+    # If it's explicitly not a cat, return False
+    if any(non_cat in label_lower for non_cat in non_cat_words):
+        return False
+    
+    # Check for cat keywords
     return any(keyword in label_lower for keyword in cat_keywords)
 
 
@@ -44,7 +56,16 @@ class TestCatDetection:
         """Test edge cases for cat detection"""
         assert is_cat_related("") == False
         assert is_cat_related("Cat Food") == True  # Contains "cat"
-        assert is_cat_related("Cattle") == False  # Contains "cat" but not a cat
+        assert is_cat_related("Cattle") == False   # Contains "cat" but not a cat
+        assert is_cat_related("Caterpillar") == False  # Contains "cat" but not a cat
+        assert is_cat_related("Vacation") == False     # Contains "cat" but not a cat
+    
+    def test_is_cat_related_tricky_cases(self):
+        """Test tricky cases that might confuse the algorithm"""
+        assert is_cat_related("Wildcat") == True      # Is actually a cat
+        assert is_cat_related("Bobcat") == True       # Is actually a cat
+        assert is_cat_related("Tomcat") == True       # Is actually a cat
+        assert is_cat_related("Housecat") == True     # Is actually a cat
 
 
 class TestLambdaHelpers:

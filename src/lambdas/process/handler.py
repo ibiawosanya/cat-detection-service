@@ -147,14 +147,26 @@ def detect_cats_in_image(image_key, bucket_name):
 
 def is_cat_related(label_name):
     """
-    Check if a label is cat-related.
+    Check if a label is cat-related with improved logic.
     """
     cat_keywords = [
         'cat', 'kitten', 'feline', 'tabby', 'siamese', 
         'persian', 'maine coon', 'ragdoll', 'british shorthair'
     ]
     
+    # Words that contain "cat" but are NOT cats
+    non_cat_words = [
+        'cattle', 'catch', 'category', 'catalog', 'caterpillar', 
+        'scatter', 'locate', 'education', 'vacation', 'delicate'
+    ]
+    
     label_lower = label_name.lower()
+    
+    # If it's explicitly not a cat, return False
+    if any(non_cat in label_lower for non_cat in non_cat_words):
+        return False
+    
+    # Check for cat keywords
     return any(keyword in label_lower for keyword in cat_keywords)
 
 def update_scan_status(scan_id, status, table_name, error_message=None):
