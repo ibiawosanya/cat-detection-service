@@ -152,7 +152,8 @@ cat-detection-service/
 ├── .github/workflows/          # CI/CD pipelines
 │   ├── deploy-dev.yml         # Development deployment
 │   ├── deploy-staging.yml     # Staging deployment
-│   └── deploy-prod.yml        # Production deployment
+│   ├── deploy-prod.yml        # Production deployment
+│   └── destroy-infrastructure.yml # Infrastructure cleanup
 ├── terraform/                 # Infrastructure as Code
 │   ├── environments/          # Environment-specific configs
 │   │   ├── dev/
@@ -356,6 +357,31 @@ curl $API_BASE_URL/status/scan-id-here?debug=true
 - `develop`: Development branch (deploys to dev)
 - `main`: Staging branch (deploys to staging)
 - `tags/releases`: Production deployment
+
+### GitOps Deployment Flow
+```bash
+# Deploy to dev (automatic on push to develop)
+git push origin develop
+
+# Deploy to staging (automatic on push to main)
+git checkout main
+git merge develop
+git push origin main
+
+# Deploy to production (on release creation)
+git tag v1.0.0
+git push origin v1.0.0
+```
+
+### Infrastructure Management
+```bash
+# Create new environments
+./scripts/bootstrap-terraform.sh [dev|staging|prod]
+
+# Destroy environments (via GitHub Actions)
+# Go to: Actions → Destroy Infrastructure → Run workflow
+# Select environment and type "DESTROY" to confirm
+```
 
 ### Code Quality
 - Python: PEP 8 compliance
