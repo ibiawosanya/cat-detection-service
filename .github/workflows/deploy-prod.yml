@@ -227,9 +227,9 @@ jobs:
           echo "🌐 PRODUCTION Web UI available at: $WEB_URL"
           echo "🔗 PRODUCTION API available at: $API_URL"
 
-      - name: Install pytest
-        run: pip install pytest requests
-
+      - name: Install test dependencies
+        run: pip install -r tests/requirements.txt
+        
       - name: Run Production Smoke Tests
         run: |
           echo "🧪 Running production smoke tests..."
