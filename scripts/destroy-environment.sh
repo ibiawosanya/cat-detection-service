@@ -145,6 +145,12 @@ else
     fi
 fi
 
+# Cleaning up IAM roles
+echo "Cleaning up IAM roles..."
+aws iam list-attached-role-policies --role-name "dev-cat-detection-lambda-role" --query 'AttachedPolicies[].PolicyArn' --output text 2>/dev/null | xargs -r -n1 aws iam detach-role-policy --role-name "dev-cat-detection-lambda-role" --policy-arn 2>/dev/null || true
+aws iam list-role-policies --role-name "dev-cat-detection-lambda-role" --query 'PolicyNames' --output text 2>/dev/null | xargs -r -n1 aws iam delete-role-policy --role-name "dev-cat-detection-lambda-role" --policy-name 2>/dev/null || true
+aws iam delete-role --role-name "dev-cat-detection-lambda-role" 2>/dev/null || true
+
 # Clean up local files
 echo -e "${YELLOW}🧹 Cleaning up local files...${NC}"
 rm -f "$TERRAFORM_DIR/backend.tf"
