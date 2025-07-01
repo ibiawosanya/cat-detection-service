@@ -6,8 +6,8 @@ from decimal import Decimal
 # Initialize AWS clients
 dynamodb = boto3.resource('dynamodb')
 
-# Environment variables - MUST match your Terraform configuration
-RESULTS_TABLE = os.environ['RESULTS_TABLE']
+# Environment variables - using original name
+DYNAMODB_TABLE = os.environ['DYNAMODB_TABLE']
 
 def lambda_handler(event, context):
     """
@@ -23,17 +23,16 @@ def lambda_handler(event, context):
         }
         
         # Handle preflight OPTIONS request
-        if event['httpMethod'] == 'OPTIONS':
+        if event.get('httpMethod') == 'OPTIONS':
             return {
                 'statusCode': 200,
                 'headers': cors_headers,
                 'body': json.dumps({'message': 'CORS preflight'})
             }
         
-        # Extract scan_id from path parameters
-        # Handle both 'scan_id' and 'id' for compatibility
+        # Extract scan_id from path parameters - your API uses 'id'
         path_params = event.get('pathParameters') or {}
-        scan_id = path_params.get('scan_id') or path_params.get('id')
+        scan_id = path_params.get('id')  # Your API Gateway uses {id} not {scan_id}
         
         if not scan_id:
             return {
@@ -49,7 +48,7 @@ def lambda_handler(event, context):
         debug_mode = query_params.get('debug', 'false').lower() == 'true'
         
         # Get item from DynamoDB
-        table = dynamodb.Table(RESULTS_TABLE)
+        table = dynamodb.Table(DYNAMODB_TABLE)
         
         response = table.get_item(
             Key={'scan_id': scan_id}
@@ -84,7 +83,7 @@ def lambda_handler(event, context):
         # Convert all Decimal types in the item
         item = decimal_to_number(item)
         
-        # Prepare the response based on status and debug mode
+        # Prepare the response based on status
         result = {
             'scan_id': item['scan_id'],
             'status': item['status'],
@@ -96,19 +95,32 @@ def lambda_handler(event, context):
         if 'error_message' in item:
             result['error_message'] = item['error_message']
         
-        # Add results if completed
+        # Add results if completed - handle both old and new field names
         if item['status'] == 'COMPLETED':
-            # Use the field names that match the process lambda output
+            # Try new field names first, fall back to old ones
+            cats_found = item.get('cats_found', item.get('has_cat', False))
+            cat_count = item.get('cat_count', 1 if cats_found else 0)
+            highest_confidence = item.get('highest_confidence', item.get('cat_confidence', 0))
+            
             result.update({
-                'cats_found': item.get('cats_found', False),
-                'cat_count': item.get('cat_count', 0),
-                'highest_confidence': item.get('highest_confidence', 0),
-                'total_labels': item.get('total_labels', 0)
+                'cats_found': cats_found,
+                'cat_count': cat_count,
+                'highest_confidence': highest_confidence,
+                'total_labels': item.get('total_labels', 0),
+                # Legacy fields for compatibility
+                'has_cat': cats_found,
+                'answer': 'Yes' if cats_found else 'No',
+                'confidence': highest_confidence
             })
             
             # Add debug data if requested
-            if debug_mode and 'debug_data' in item:
-                result['debug_data'] = item['debug_data']
+            if debug_mode:
+                if 'debug_data' in item:
+                    result['debug_data'] = item['debug_data']
+                elif 'debug_labels' in item:
+                    result['debug_labels'] = item['debug_labels']
+        
+        print(f"Returning result: {json.dumps(result, indent=2)}")
         
         return {
             'statusCode': 200,
@@ -128,3 +140,7 @@ def lambda_handler(event, context):
                 'details': str(e)
             })
         }
+
+# Keep the old function name for compatibility
+def status(event, context):
+    return lambda_handler(event, context)

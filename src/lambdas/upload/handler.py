@@ -1,145 +1,208 @@
 import json
 import boto3
 import uuid
-import os
+import base64
 from datetime import datetime
+import os
 from decimal import Decimal
-
-# Initialize AWS clients
-s3 = boto3.client('s3')
-sqs = boto3.client('sqs')
-dynamodb = boto3.resource('dynamodb')
-
-# Environment variables - MUST match your Terraform configuration
-IMAGES_BUCKET = os.environ['IMAGES_BUCKET']
-PROCESSING_QUEUE_URL = os.environ['PROCESSING_QUEUE_URL']
-RESULTS_TABLE = os.environ['RESULTS_TABLE']
 
 def lambda_handler(event, context):
     """
-    Handle image upload requests.
-    Validates file type, stores in S3, creates DynamoDB record, and queues for processing.
+    Handle image upload requests with original environment variable names.
     """
     
+    # Always return CORS headers, even on errors
+    cors_headers = {
+        'Access-Control-Allow-Origin': '*',
+        'Access-Control-Allow-Headers': 'Content-Type',
+        'Access-Control-Allow-Methods': 'POST,OPTIONS'
+    }
+    
     try:
-        # Enable CORS for all responses
-        cors_headers = {
-            'Access-Control-Allow-Origin': '*',
-            'Access-Control-Allow-Headers': 'Content-Type',
-            'Access-Control-Allow-Methods': 'OPTIONS,POST,GET'
-        }
+        print(f"Upload Lambda started. Event: {json.dumps(event, default=str)}")
         
         # Handle preflight OPTIONS request
-        if event['httpMethod'] == 'OPTIONS':
+        if event.get('httpMethod') == 'OPTIONS':
             return {
                 'statusCode': 200,
                 'headers': cors_headers,
                 'body': json.dumps({'message': 'CORS preflight'})
             }
         
-        print(f"Received upload request: {event['httpMethod']}")
+        # Get environment variables - using your original names
+        try:
+            s3_bucket = os.environ['S3_BUCKET']
+            sqs_queue = os.environ['SQS_QUEUE'] 
+            dynamodb_table = os.environ['DYNAMODB_TABLE']
+        except KeyError as e:
+            error_msg = f"Missing environment variable: {str(e)}"
+            print(f"ERROR: {error_msg}")
+            return {
+                'statusCode': 500,
+                'headers': cors_headers,
+                'body': json.dumps({'error': error_msg})
+            }
         
-        # Parse the request body - handle both base64 and direct upload
-        if event.get('isBase64Encoded', False):
-            import base64
-            body = base64.b64decode(event['body'])
-            content_type = event['headers'].get('content-type', event['headers'].get('Content-Type', ''))
-        else:
-            # Try to parse JSON body (for testing)
-            try:
-                json_body = json.loads(event['body'])
-                if 'image_data' in json_body:
-                    # Base64 encoded image in JSON
-                    import base64
-                    body = base64.b64decode(json_body['image_data'])
-                    content_type = json_body.get('content_type', 'image/jpeg')
-                else:
-                    return {
-                        'statusCode': 400,
-                        'headers': cors_headers,
-                        'body': json.dumps({'error': 'image_data field required in JSON body'})
-                    }
-            except:
-                return {
-                    'statusCode': 400,
-                    'headers': cors_headers,
-                    'body': json.dumps({'error': 'Invalid request format'})
-                }
+        print(f"Environment variables - S3: {s3_bucket}, SQS: {sqs_queue}, DynamoDB: {dynamodb_table}")
         
-        print(f"Content type: {content_type}, Body size: {len(body)}")
+        # Initialize AWS clients
+        try:
+            s3_client = boto3.client('s3')
+            sqs_client = boto3.client('sqs')
+            dynamodb = boto3.resource('dynamodb')
+            print("AWS clients initialized successfully")
+        except Exception as e:
+            return {
+                'statusCode': 500,
+                'headers': cors_headers,
+                'body': json.dumps({'error': f'Failed to initialize AWS clients: {str(e)}'})
+            }
         
-        # Validate content type
-        allowed_types = ['image/jpeg', 'image/jpg', 'image/png']
-        if content_type not in allowed_types:
+        # Parse request body
+        if not event.get('body'):
             return {
                 'statusCode': 400,
                 'headers': cors_headers,
-                'body': json.dumps({
-                    'error': f'Invalid file type. Only JPEG and PNG files are allowed. Received: {content_type}'
-                })
+                'body': json.dumps({'error': 'Request body is required'})
             }
         
-        # Generate unique identifiers
-        scan_id = str(uuid.uuid4())
-        file_extension = 'jpg' if content_type in ['image/jpeg', 'image/jpg'] else 'png'
-        image_key = f"uploads/{scan_id}.{file_extension}"
+        try:
+            body = json.loads(event['body'])
+        except json.JSONDecodeError as e:
+            return {
+                'statusCode': 400,
+                'headers': cors_headers,
+                'body': json.dumps({'error': f'Invalid JSON: {str(e)}'})
+            }
         
-        print(f"Generated scan_id: {scan_id}, image_key: {image_key}")
+        print(f"Parsed body keys: {list(body.keys())}")
+        
+        # Validate required fields
+        if 'image_data' not in body:
+            return {
+                'statusCode': 400,
+                'headers': cors_headers,
+                'body': json.dumps({'error': 'image_data field is required'})
+            }
+        
+        if 'content_type' not in body:
+            return {
+                'statusCode': 400,
+                'headers': cors_headers,
+                'body': json.dumps({'error': 'content_type field is required'})
+            }
+        
+        # Validate file type
+        content_type = body['content_type']
+        if content_type not in ['image/jpeg', 'image/png']:
+            return {
+                'statusCode': 400,
+                'headers': cors_headers,
+                'body': json.dumps({'error': 'Only JPEG and PNG files are allowed'})
+            }
+        
+        # Generate unique scan ID
+        scan_id = str(uuid.uuid4())
+        timestamp = datetime.utcnow().isoformat()
+        
+        print(f"Generated scan_id: {scan_id}")
+        
+        # Decode image data
+        try:
+            image_data = base64.b64decode(body['image_data'])
+        except Exception as e:
+            return {
+                'statusCode': 400,
+                'headers': cors_headers,
+                'body': json.dumps({'error': f'Invalid base64 image data: {str(e)}'})
+            }
+        
+        print(f"Image decoded, size: {len(image_data)} bytes")
         
         # Upload image to S3
-        s3.put_object(
-            Bucket=IMAGES_BUCKET,
-            Key=image_key,
-            Body=body,
-            ContentType=content_type
-        )
-        print(f"Uploaded to S3: s3://{IMAGES_BUCKET}/{image_key}")
+        s3_key = f"images/{scan_id}.{content_type.split('/')[-1]}"
         
-        # Create initial record in DynamoDB (with Decimal types)
-        table = dynamodb.Table(RESULTS_TABLE)
+        try:
+            s3_client.put_object(
+                Bucket=s3_bucket,
+                Key=s3_key,
+                Body=image_data,
+                ContentType=content_type
+            )
+            print(f"Uploaded to S3: s3://{s3_bucket}/{s3_key}")
+        except Exception as e:
+            print(f"S3 upload error: {str(e)}")
+            return {
+                'statusCode': 500,
+                'headers': cors_headers,
+                'body': json.dumps({'error': f'Failed to upload to S3: {str(e)}'})
+            }
         
-        timestamp = datetime.utcnow().isoformat()
-        file_size_decimal = Decimal(str(len(body)))  # Convert file size to Decimal
-        
-        initial_record = {
-            'scan_id': scan_id,
-            'image_key': image_key,
-            'status': 'PENDING',  # Changed from QUEUED to PENDING for consistency
-            'file_size': file_size_decimal,
-            'content_type': content_type,
-            'created_at': timestamp,
-            'updated_at': timestamp
-        }
-        
-        table.put_item(Item=initial_record)
-        print(f"Created DynamoDB record for scan_id: {scan_id}")
+        # Create initial record in DynamoDB
+        try:
+            table = dynamodb.Table(dynamodb_table)
+            
+            # Convert file size to Decimal for DynamoDB
+            file_size = Decimal(str(len(image_data)))
+            
+            table.put_item(
+                Item={
+                    'scan_id': scan_id,
+                    'user_id': body.get('user_id', 'anonymous'),
+                    'status': 'PENDING',
+                    's3_bucket': s3_bucket,
+                    's3_key': s3_key,
+                    'image_key': s3_key,  # For compatibility
+                    'content_type': content_type,
+                    'file_size': file_size,
+                    'created_at': timestamp,
+                    'updated_at': timestamp
+                }
+            )
+            print(f"Created DynamoDB record for scan_id: {scan_id}")
+        except Exception as e:
+            print(f"DynamoDB error: {str(e)}")
+            return {
+                'statusCode': 500,
+                'headers': cors_headers,
+                'body': json.dumps({'error': f'Failed to create DynamoDB record: {str(e)}'})
+            }
         
         # Send message to SQS for processing
-        message_body = {
-            'scan_id': scan_id,
-            'image_key': image_key,
-            'content_type': content_type
-        }
+        try:
+            sqs_message = {
+                'scan_id': scan_id,
+                's3_bucket': s3_bucket,
+                's3_key': s3_key,
+                'image_key': s3_key  # For compatibility
+            }
+            
+            sqs_client.send_message(
+                QueueUrl=sqs_queue,
+                MessageBody=json.dumps(sqs_message)
+            )
+            print(f"Sent SQS message for scan_id: {scan_id}")
+        except Exception as e:
+            print(f"SQS error: {str(e)}")
+            return {
+                'statusCode': 500,
+                'headers': cors_headers,
+                'body': json.dumps({'error': f'Failed to queue for processing: {str(e)}'})
+            }
         
-        sqs.send_message(
-            QueueUrl=PROCESSING_QUEUE_URL,
-            MessageBody=json.dumps(message_body)
-        )
-        print(f"Sent SQS message for scan_id: {scan_id}")
-        
+        # Return success response
         return {
             'statusCode': 200,
             'headers': cors_headers,
             'body': json.dumps({
                 'scan_id': scan_id,
-                'message': 'Image uploaded successfully and queued for processing',
-                'image_key': image_key,
-                'status': 'PENDING'
+                'status': 'PENDING',
+                'message': 'Image uploaded successfully and queued for processing'
             })
         }
         
     except Exception as e:
-        print(f"Error in upload handler: {str(e)}")
+        print(f"Unexpected error in upload handler: {str(e)}")
         import traceback
         print(traceback.format_exc())
         return {
@@ -150,3 +213,7 @@ def lambda_handler(event, context):
                 'details': str(e)
             })
         }
+
+# Keep the old function name for compatibility
+def upload(event, context):
+    return lambda_handler(event, context)

@@ -8,9 +8,9 @@ from datetime import datetime
 rekognition = boto3.client('rekognition')
 dynamodb = boto3.resource('dynamodb')
 
-# Environment variables
-RESULTS_TABLE = os.environ['RESULTS_TABLE']
-IMAGES_BUCKET = os.environ['IMAGES_BUCKET']
+# Environment variables - using original names
+DYNAMODB_TABLE = os.environ['DYNAMODB_TABLE']
+S3_BUCKET = os.environ['S3_BUCKET']
 
 def lambda_handler(event, context):
     """
@@ -23,16 +23,19 @@ def lambda_handler(event, context):
         for record in event['Records']:
             message_body = json.loads(record['body'])
             scan_id = message_body['scan_id']
-            image_key = message_body['image_key']
             
-            print(f"Processing scan {scan_id} for image {image_key}")
+            # Handle both old and new message formats
+            image_key = message_body.get('image_key') or message_body.get('s3_key')
+            s3_bucket = message_body.get('s3_bucket') or S3_BUCKET
+            
+            print(f"Processing scan {scan_id} for image {image_key} in bucket {s3_bucket}")
             
             # Update status to processing
             update_scan_status(scan_id, 'PROCESSING')
             
             try:
                 # Perform cat detection
-                result = detect_cats_in_image(image_key)
+                result = detect_cats_in_image(image_key, s3_bucket)
                 
                 # Store results
                 store_scan_results(scan_id, image_key, result)
@@ -47,24 +50,33 @@ def lambda_handler(event, context):
     
     except Exception as e:
         print(f"Error in lambda_handler: {str(e)}")
+        import traceback
+        print(traceback.format_exc())
         raise
 
-def detect_cats_in_image(image_key):
+def detect_cats_in_image(image_key, bucket_name=None):
     """
     Use AWS Rekognition to detect cats in the image.
     """
     try:
+        if not bucket_name:
+            bucket_name = S3_BUCKET
+            
+        print(f"Calling Rekognition for s3://{bucket_name}/{image_key}")
+        
         # Call Rekognition to detect labels
         response = rekognition.detect_labels(
             Image={
                 'S3Object': {
-                    'Bucket': IMAGES_BUCKET,
+                    'Bucket': bucket_name,
                     'Name': image_key
                 }
             },
             MaxLabels=20,
             MinConfidence=70.0
         )
+        
+        print(f"Rekognition found {len(response['Labels'])} labels")
         
         # Process the response to find cat-related labels
         cat_labels = []
@@ -102,6 +114,7 @@ def detect_cats_in_image(image_key):
             # Check if this is a cat-related label
             if is_cat_related(label['Name']):
                 cat_labels.append(label_data)
+                print(f"Found cat label: {label['Name']} with confidence {label['Confidence']}")
         
         # Determine if cats were found
         cats_found = len(cat_labels) > 0
@@ -110,6 +123,8 @@ def detect_cats_in_image(image_key):
         highest_confidence = Decimal('0')
         if cat_labels:
             highest_confidence = max(label['Confidence'] for label in cat_labels)
+        
+        print(f"Cat detection result: cats_found={cats_found}, count={len(cat_labels)}, highest_confidence={highest_confidence}")
         
         return {
             'cats_found': cats_found,
@@ -122,6 +137,8 @@ def detect_cats_in_image(image_key):
         
     except Exception as e:
         print(f"Error in detect_cats_in_image: {str(e)}")
+        import traceback
+        print(traceback.format_exc())
         raise
 
 def is_cat_related(label_name):
@@ -141,7 +158,7 @@ def update_scan_status(scan_id, status, error_message=None):
     Update the scan status in DynamoDB.
     """
     try:
-        table = dynamodb.Table(RESULTS_TABLE)
+        table = dynamodb.Table(DYNAMODB_TABLE)
         
         update_expression = "SET #status = :status, #updated = :updated"
         expression_attribute_names = {
@@ -165,6 +182,8 @@ def update_scan_status(scan_id, status, error_message=None):
             ExpressionAttributeValues=expression_attribute_values
         )
         
+        print(f"Updated scan {scan_id} status to {status}")
+        
     except Exception as e:
         print(f"Error updating scan status: {str(e)}")
         raise
@@ -174,19 +193,31 @@ def store_scan_results(scan_id, image_key, detection_result):
     Store the complete scan results in DynamoDB.
     """
     try:
-        table = dynamodb.Table(RESULTS_TABLE)
+        table = dynamodb.Table(DYNAMODB_TABLE)
         
-        # Prepare the item for DynamoDB
+        # Prepare the item for DynamoDB with both old and new field names for compatibility
+        timestamp = datetime.utcnow().isoformat()
+        cats_found = detection_result['cats_found']
+        highest_confidence = detection_result['highest_confidence']
+        
         item = {
             'scan_id': scan_id,
             'image_key': image_key,
+            's3_key': image_key,  # For compatibility
             'status': 'COMPLETED',
-            'cats_found': detection_result['cats_found'],
+            
+            # New field names
+            'cats_found': cats_found,
             'cat_count': detection_result['cat_count'],
-            'highest_confidence': detection_result['highest_confidence'],
+            'highest_confidence': highest_confidence,
             'total_labels': detection_result['total_labels'],
-            'created_at': datetime.utcnow().isoformat(),
-            'updated_at': datetime.utcnow().isoformat()
+            
+            # Legacy field names for compatibility
+            'has_cat': cats_found,
+            'cat_confidence': highest_confidence,
+            
+            'created_at': timestamp,
+            'updated_at': timestamp
         }
         
         # Add detailed results for debug mode
@@ -195,11 +226,16 @@ def store_scan_results(scan_id, image_key, detection_result):
             'all_labels': detection_result['all_labels']
         }
         
+        # Legacy debug data field
+        item['debug_labels'] = detection_result['all_labels']
+        
         # Store in DynamoDB
         table.put_item(Item=item)
         
-        print(f"Stored results for scan {scan_id}")
+        print(f"Stored results for scan {scan_id}: cats_found={cats_found}, confidence={highest_confidence}")
         
     except Exception as e:
         print(f"Error storing scan results: {str(e)}")
+        import traceback
+        print(traceback.format_exc())
         raise
