@@ -11,11 +11,8 @@ terraform {
     }
   }
   
-  backend "s3" {
-    bucket = "cat-detection-terraform-state-777"
-    key    = "cat-detection/prod/terraform.tfstate"
-    region = "eu-west-1"
-  }
+  # Backend configuration is now in backend.tf (auto-generated)
+  # Run ./scripts/bootstrap-terraform.sh prod to create it
 }
 
 provider "aws" {
@@ -41,11 +38,6 @@ module "storage" {
   
   environment = local.environment
   project     = local.project
-  
-  # Production-specific overrides
-  dynamodb_billing_mode = "PROVISIONED"
-  dynamodb_read_capacity = 10
-  dynamodb_write_capacity = 10
 }
 
 # Lambda Module
@@ -60,11 +52,6 @@ module "lambda" {
   sqs_queue_arn       = module.storage.sqs_queue_arn
   dynamodb_table_name = module.storage.dynamodb_table_name
   dynamodb_table_arn  = module.storage.dynamodb_table_arn
-  
-  # Production-specific settings
-  lambda_memory_size = 1024
-  lambda_timeout = 60
-  reserved_concurrency = 100
 }
 
 # API Gateway Module
@@ -78,10 +65,6 @@ module "api_gateway" {
   status_lambda_invoke_arn = module.lambda.status_lambda_invoke_arn
   upload_lambda_function_name = module.lambda.upload_lambda_function_name
   status_lambda_function_name = module.lambda.status_lambda_function_name
-  
-  # Production-specific API Gateway settings
-  throttle_burst_limit = 2000
-  throttle_rate_limit = 1000
 }
 
 # Web UI Module
@@ -90,10 +73,6 @@ module "web_ui" {
   
   environment = local.environment
   project     = local.project
-  
-  # Production-specific CloudFront settings
-  price_class = "PriceClass_All"
-  enable_compression = true
 }
 
 # Monitoring Module
@@ -103,7 +82,7 @@ module "monitoring" {
   environment         = local.environment
   project            = local.project
   aws_region         = var.aws_region
-  log_retention_days = 30  # Longer retention for prod
+  log_retention_days = 30  # Longest retention for production
   
   lambda_function_names = [
     module.lambda.upload_lambda_function_name,
@@ -113,8 +92,21 @@ module "monitoring" {
   
   sqs_queue_name = module.storage.sqs_queue_name
   dynamodb_table_name = module.storage.dynamodb_table_name
-  
-  # Production alerting
-  enable_sns_alerts = true
-  alert_email = "ibi.awosanya@gmail.com"
+}
+
+# Outputs
+output "api_gateway_url" {
+  value = module.api_gateway.api_gateway_url
+}
+
+output "web_bucket_name" {
+  value = module.web_ui.s3_bucket_name
+}
+
+output "cloudfront_distribution_id" {
+  value = module.web_ui.cloudfront_distribution_id
+}
+
+output "web_url" {
+  value = module.web_ui.cloudfront_url
 }

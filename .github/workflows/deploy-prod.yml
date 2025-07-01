@@ -1,0 +1,281 @@
+name: Deploy to Production
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:  # Allow manual deployment with approval
+
+env:
+  AWS_REGION: eu-west-1
+  ENVIRONMENT: prod
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: |
+          pip install -r requirements.txt
+
+      - name: Run unit tests
+        run: |
+          if [ -f "tests/unit/test_lambda_functions.py" ]; then
+            echo "Running unit tests..."
+            pytest tests/unit/ -v
+          else
+            echo "No unit tests found, skipping..."
+          fi
+
+  security:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.11'
+
+      - name: Install security tools
+        run: |
+          pip install bandit safety
+
+      - name: Enhanced security scans
+        run: |
+          echo "🔒 Running enhanced production security scans..."
+          
+          # Strict security scanning for production
+          echo "📊 Scanning Python code with Bandit (strict mode)..."
+          bandit -r src/ -f json -o bandit-report.json
+          bandit -r src/ --severity-level medium
+          
+          # Check for known security vulnerabilities in dependencies
+          echo "🔍 Checking dependencies with Safety (strict mode)..."
+          safety check --json --output safety-report.json
+          safety check
+          
+          echo "✅ Enhanced security scans completed"
+
+      - name: Upload security reports
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: prod-security-reports
+          path: |
+            bandit-report.json
+            safety-report.json
+
+      - name: Install TFSec
+        run: |
+          curl -s https://raw.githubusercontent.com/aquasecurity/tfsec/master/scripts/install_linux.sh | bash
+
+      - name: Run Terraform security scan
+        run: |
+          echo "🏗️  Scanning Terraform with TFSec (strict mode)..."
+          tfsec terraform/ --format json --out tfsec-report.json
+          tfsec terraform/
+
+  approval:
+    runs-on: ubuntu-latest
+    needs: [test, security]
+    environment: production  # Requires manual approval
+    steps:
+      - name: Production deployment approval
+        run: |
+          echo "🚨 PRODUCTION DEPLOYMENT APPROVED"
+          echo "Proceeding with production deployment..."
+
+  build-and-deploy:
+    needs: [test, security, approval]
+    runs-on: ubuntu-latest
+    environment: production
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.11'
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '18'
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v2
+        with:
+          terraform_version: 1.5.0
+          terraform_wrapper: false
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v3
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Bootstrap Terraform Backend
+        run: |
+          echo "🚀 Bootstrapping Terraform backend for ${{ env.ENVIRONMENT }}..."
+          
+          # Make script executable
+          chmod +x scripts/bootstrap-terraform.sh
+          
+          # Check if backend.tf already exists
+          if [ ! -f "terraform/environments/${{ env.ENVIRONMENT }}/backend.tf" ]; then
+            echo "Creating new Terraform backend..."
+            ./scripts/bootstrap-terraform.sh ${{ env.ENVIRONMENT }} ${{ env.AWS_REGION }}
+          else
+            echo "✅ Backend configuration already exists"
+            cat terraform/environments/${{ env.ENVIRONMENT }}/backend.tf
+          fi
+
+      - name: Build Lambda packages
+        run: |
+          mkdir -p dist
+          
+          # Build upload lambda
+          cd src/lambdas/upload
+          pip install -r requirements.txt -t .
+          zip -r ../../../dist/upload.zip .
+          cd ../../..
+          
+          # Build process lambda
+          cd src/lambdas/process
+          pip install -r requirements.txt -t .
+          zip -r ../../../dist/process.zip .
+          cd ../../..
+          
+          # Build status lambda
+          cd src/lambdas/status
+          pip install -r requirements.txt -t .
+          zip -r ../../../dist/status.zip .
+          cd ../../..
+
+      - name: Terraform Init
+        run: |
+          cd terraform/environments/prod
+          terraform init
+
+      - name: Terraform Plan
+        run: |
+          cd terraform/environments/prod
+          terraform plan -out=tfplan
+
+      - name: Terraform Apply
+        run: |
+          cd terraform/environments/prod
+          terraform apply tfplan
+
+      - name: Get Terraform Outputs
+        id: terraform_outputs
+        run: |
+          cd terraform/environments/prod
+          
+          # Capture outputs and set as step outputs
+          API_URL=$(terraform output -raw api_gateway_url)
+          WEB_BUCKET=$(terraform output -raw web_bucket_name)
+          CLOUDFRONT_ID=$(terraform output -raw cloudfront_distribution_id)
+          WEB_URL=$(terraform output -raw web_url)
+          
+          echo "api_url=$API_URL" >> $GITHUB_OUTPUT
+          echo "web_bucket=$WEB_BUCKET" >> $GITHUB_OUTPUT
+          echo "cloudfront_id=$CLOUDFRONT_ID" >> $GITHUB_OUTPUT
+          echo "web_url=$WEB_URL" >> $GITHUB_OUTPUT
+          
+          echo "✅ API URL: $API_URL"
+          echo "✅ Web Bucket: $WEB_BUCKET" 
+          echo "✅ CloudFront ID: $CLOUDFRONT_ID"
+          echo "✅ Web URL: $WEB_URL"
+
+      - name: Deploy Web UI
+        run: |
+          echo "🚀 Starting PRODUCTION web UI deployment..."
+          
+          # Use step outputs
+          API_URL="${{ steps.terraform_outputs.outputs.api_url }}"
+          WEB_BUCKET="${{ steps.terraform_outputs.outputs.web_bucket }}"
+          CLOUDFRONT_ID="${{ steps.terraform_outputs.outputs.cloudfront_id }}"
+          WEB_URL="${{ steps.terraform_outputs.outputs.web_url }}"
+          
+          echo "📦 Installing dependencies..."
+          cd src/web-ui
+          npm install
+          
+          echo "🔨 Building React app with production API URL..."
+          REACT_APP_API_URL="$API_URL" npm run build
+          
+          echo "☁️ Deploying to PRODUCTION S3 bucket: $WEB_BUCKET"
+          aws s3 sync build/ "s3://$WEB_BUCKET" --delete
+          
+          echo "🌐 Invalidating CloudFront cache..."
+          aws cloudfront create-invalidation --distribution-id "$CLOUDFRONT_ID" --paths "/*"
+          
+          echo "✅ PRODUCTION deployment completed successfully!"
+          echo "🌐 PRODUCTION Web UI available at: $WEB_URL"
+          echo "🔗 PRODUCTION API available at: $API_URL"
+
+      - name: Install test dependencies
+        run: pip install -r tests/requirements.txt
+        
+      - name: Run Production Smoke Tests
+        run: |
+          echo "🧪 Running production smoke tests..."
+          
+          # Set API URL for tests
+          export API_BASE_URL="${{ steps.terraform_outputs.outputs.api_url }}"
+          
+          # Run basic health checks only (not full integration tests)
+          if [ -f "tests/integration/test_api.py" ]; then
+            echo "Running production smoke tests: $API_BASE_URL"
+            pytest tests/integration/test_api.py::TestAPIHealth -v --tb=short
+          else
+            echo "No smoke tests found, skipping..."
+          fi
+
+      - name: Production Deployment Notification
+        run: |
+          echo "🎉 PRODUCTION DEPLOYMENT COMPLETE!"
+          echo ""
+          echo "🌐 LIVE Web UI: ${{ steps.terraform_outputs.outputs.web_url }}"
+          echo "🔗 LIVE API: ${{ steps.terraform_outputs.outputs.api_url }}"
+          echo ""
+          echo "✅ Upload endpoint: ${{ steps.terraform_outputs.outputs.api_url }}/upload"
+          echo "✅ Status endpoint: ${{ steps.terraform_outputs.outputs.api_url }}/status/{scan_id}"
+          echo ""
+          echo "🚨 PRODUCTION SERVICE IS NOW LIVE!"
+          echo "🔒 All security scans passed"
+          echo "🧪 Smoke tests passed"
+          echo "🚀 Ready for users!"
+
+  notify-success:
+    runs-on: ubuntu-latest
+    needs: [build-and-deploy]
+    if: success()
+    steps:
+      - name: Success notification
+        run: |
+          echo "✅ Production deployment successful!"
+          echo "Service is live and ready for users."
+
+  notify-failure:
+    runs-on: ubuntu-latest
+    needs: [build-and-deploy]
+    if: failure()
+    steps:
+      - name: Failure notification
+        run: |
+          echo "❌ Production deployment failed!"
+          echo "Please check the logs and retry."

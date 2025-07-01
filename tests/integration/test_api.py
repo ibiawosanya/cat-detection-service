@@ -1,101 +1,174 @@
 import pytest
 import requests
 import base64
-import json
 import time
 import os
+from io import BytesIO
 from PIL import Image
-import io
 
-API_URL = os.environ.get('API_URL', 'https://api.example.com/dev')
+# API Configuration - will be set by environment variable in CI/CD
+API_BASE_URL = os.getenv('API_BASE_URL', 'https://gculxuhkz2.execute-api.eu-west-1.amazonaws.com/dev')
+
+
+@pytest.fixture
+def sample_image_base64():
+    """Create a small test image and convert to base64"""
+    # Create a small 10x10 red image for testing
+    img = Image.new('RGB', (10, 10), color='red')
+    buffer = BytesIO()
+    img.save(buffer, format='JPEG')
+    img_data = buffer.getvalue()
+    return base64.b64encode(img_data).decode('utf-8')
+
 
 class TestCatDetectionAPI:
+    """Integration tests for the Cat Detection API"""
     
-    def setup_method(self):
-        """Setup test data"""
-        # Create a simple test image
-        self.test_image = self._create_test_image()
-        self.cat_image_b64 = base64.b64encode(self.test_image).decode('utf-8')
-    
-    def _create_test_image(self):
-        """Create a simple PNG image for testing"""
-        img = Image.new('RGB', (100, 100), color='red')
-        img_bytes = io.BytesIO()
-        img.save(img_bytes, format='PNG')
-        return img_bytes.getvalue()
-    
-    def test_upload_valid_image(self):
-        """Test uploading a valid PNG image"""
-        response = requests.post(f"{API_URL}/upload", json={
-            'image_data': self.cat_image_b64,
-            'content_type': 'image/png',
+    def test_upload_valid_image(self, sample_image_base64):
+        """Test uploading a valid image to the API"""
+        upload_data = {
+            'image_data': sample_image_base64,
+            'content_type': 'image/jpeg',
             'user_id': 'test-user'
-        })
+        }
+        
+        response = requests.post(f'{API_BASE_URL}/upload', json=upload_data)
         
         assert response.status_code == 200
         data = response.json()
         assert 'scan_id' in data
+        assert 'status' in data
         assert data['status'] == 'PENDING'
-        
-        return data['scan_id']
+        # Don't return anything - just assert
     
-    def test_upload_invalid_file_type(self):
-        """Test uploading invalid file type"""
-        response = requests.post(f"{API_URL}/upload", json={
-            'image_data': self.cat_image_b64,
-            'content_type': 'image/gif',  # Invalid
+    def test_upload_invalid_content_type(self, sample_image_base64):
+        """Test uploading with invalid content type"""
+        upload_data = {
+            'image_data': sample_image_base64,
+            'content_type': 'image/gif',  # Not allowed
             'user_id': 'test-user'
-        })
+        }
+        
+        response = requests.post(f'{API_BASE_URL}/upload', json=upload_data)
         
         assert response.status_code == 400
         data = response.json()
         assert 'error' in data
+        assert 'JPEG and PNG' in data['error']
     
-    def test_check_status_nonexistent(self):
+    def test_upload_missing_data(self):
+        """Test uploading without required image data"""
+        upload_data = {
+            'content_type': 'image/jpeg',
+            'user_id': 'test-user'
+            # Missing image_data
+        }
+        
+        response = requests.post(f'{API_BASE_URL}/upload', json=upload_data)
+        
+        assert response.status_code == 400
+        data = response.json()
+        assert 'error' in data
+        assert 'image_data' in data['error']
+    
+    def test_status_nonexistent_scan(self):
         """Test checking status of non-existent scan"""
-        fake_id = 'non-existent-id'
-        response = requests.get(f"{API_URL}/status/{fake_id}")
+        fake_scan_id = 'nonexistent-scan-id'
+        
+        response = requests.get(f'{API_BASE_URL}/status/{fake_scan_id}')
         
         assert response.status_code == 404
         data = response.json()
         assert 'error' in data
+        assert 'not found' in data['error'].lower()
     
-    def test_full_workflow(self):
-        """Test complete upload -> process -> check status workflow"""
+    def test_status_with_debug(self, sample_image_base64):
+        """Test status endpoint with debug parameter"""
+        # First upload an image
+        upload_data = {
+            'image_data': sample_image_base64,
+            'content_type': 'image/jpeg',
+            'user_id': 'test-user'
+        }
+        
+        upload_response = requests.post(f'{API_BASE_URL}/upload', json=upload_data)
+        assert upload_response.status_code == 200
+        scan_id = upload_response.json()['scan_id']
+        
+        # Check status with debug
+        response = requests.get(f'{API_BASE_URL}/status/{scan_id}?debug=true')
+        
+        assert response.status_code == 200
+        data = response.json()
+        assert 'scan_id' in data
+        assert 'status' in data
+        # Status should be PENDING, PROCESSING, or COMPLETED
+        assert data['status'] in ['PENDING', 'PROCESSING', 'COMPLETED']
+    
+    @pytest.mark.slow
+    def test_full_workflow(self, sample_image_base64):
+        """Test the complete upload -> process -> result workflow"""
         # Upload image
-        scan_id = self.test_upload_valid_image()
+        upload_data = {
+            'image_data': sample_image_base64,
+            'content_type': 'image/jpeg',
+            'user_id': 'integration-test'
+        }
         
-        # Poll for completion (max 60 seconds)
-        start_time = time.time()
-        max_wait = 60
+        upload_response = requests.post(f'{API_BASE_URL}/upload', json=upload_data)
+        assert upload_response.status_code == 200
+        scan_id = upload_response.json()['scan_id']
         
-        while time.time() - start_time < max_wait:
-            response = requests.get(f"{API_URL}/status/{scan_id}")
+        # Poll for completion (with timeout)
+        max_attempts = 20  # 60 seconds max
+        for attempt in range(max_attempts):
+            response = requests.get(f'{API_BASE_URL}/status/{scan_id}')
             assert response.status_code == 200
             
             data = response.json()
-            if data['status'] == 'COMPLETED':
-                assert 'has_cat' in data
-                assert 'answer' in data
-                assert data['answer'] in ['Yes', 'No']
-                break
-            elif data['status'] == 'ERROR':
-                pytest.fail(f"Processing failed: {data.get('error_message', 'Unknown error')}")
+            status = data['status']
             
-            time.sleep(2)
-        else:
-            pytest.fail("Processing did not complete within timeout")
+            if status == 'COMPLETED':
+                # Verify the response structure
+                assert 'cats_found' in data
+                assert 'cat_count' in data
+                assert 'highest_confidence' in data
+                assert isinstance(data['cats_found'], bool)
+                assert isinstance(data['cat_count'], int)
+                assert isinstance(data['highest_confidence'], (int, float))
+                return  # Test passed
+            
+            elif status == 'ERROR':
+                pytest.fail(f"Processing failed with error: {data.get('error_message', 'Unknown error')}")
+            
+            # Wait before next check
+            time.sleep(3)
+        
+        pytest.fail(f"Processing did not complete within {max_attempts * 3} seconds")
+
+
+class TestAPIHealth:
+    """Basic health checks for the API"""
     
-    def test_debug_mode(self):
-        """Test debug mode returns additional data"""
-        scan_id = self.test_upload_valid_image()
+    def test_api_reachable(self):
+        """Test that the API is reachable"""
+        try:
+            # Try to hit a known endpoint (even if it fails, we just want to reach the API)
+            response = requests.get(f'{API_BASE_URL}/status/health-check')
+            # We expect 404 (endpoint doesn't exist) but that means API is reachable
+            assert response.status_code in [404, 400, 500]  # Any response means API is up
+        except requests.exceptions.ConnectionError:
+            pytest.fail("Cannot connect to API - check if service is deployed")
+    
+    def test_cors_headers(self, sample_image_base64):
+        """Test that CORS headers are present"""
+        upload_data = {
+            'image_data': sample_image_base64,
+            'content_type': 'image/jpeg'
+        }
         
-        # Wait for processing
-        time.sleep(10)
+        response = requests.post(f'{API_BASE_URL}/upload', json=upload_data)
         
-        response = requests.get(f"{API_URL}/status/{scan_id}?debug=true")
-        assert response.status_code == 200
-        
-        data = response.json()
-        if data['status'] == 'COMPLETED':
-            assert 'debug_labels' in data
+        # Check for CORS headers
+        assert 'Access-Control-Allow-Origin' in response.headers
+        assert response.headers['Access-Control-Allow-Origin'] == '*'

@@ -107,7 +107,7 @@ resource "aws_api_gateway_integration_response" "upload_options_integration_resp
   response_parameters = {
     "method.response.header.Access-Control-Allow-Headers" = "'Content-Type,X-Amz-Date,Authorization,X-Api-Key,X-Amz-Security-Token'"
     "method.response.header.Access-Control-Allow-Methods" = "'POST,OPTIONS'"
-    "method.response.header.Access-Control-Allow-Origin"  = "join(\",\", var.cors_allow_origins)"
+    "method.response.header.Access-Control-Allow-Origin"  = "'*'"
   }
 }
 
@@ -137,24 +137,35 @@ resource "aws_api_gateway_deployment" "deployment" {
   ]
   
   rest_api_id = aws_api_gateway_rest_api.cat_detection.id
-  stage_name  = var.environment
   
   lifecycle {
     create_before_destroy = true
   }
 }
 
+# Stage
+resource "aws_api_gateway_stage" "stage" {
+  deployment_id = aws_api_gateway_deployment.deployment.id
+  rest_api_id   = aws_api_gateway_rest_api.cat_detection.id
+  stage_name    = var.environment
+  
+  tags = {
+    Environment = var.environment
+    Project     = var.project
+  }
+}
+
 # Throttling
 resource "aws_api_gateway_method_settings" "throttling" {
   rest_api_id = aws_api_gateway_rest_api.cat_detection.id
-  stage_name  = aws_api_gateway_deployment.deployment.stage_name
+  stage_name  = aws_api_gateway_stage.stage.stage_name
   method_path = "*/*"
 
   settings {
     throttling_rate_limit  = var.throttle_rate_limit
     throttling_burst_limit = var.throttle_burst_limit
-    logging_level         = "INFO"
-    data_trace_enabled    = true
+    # logging_level         = "INFO"
+    # data_trace_enabled    = true
     metrics_enabled       = true
   }
 }

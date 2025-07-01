@@ -1,4 +1,4 @@
-# Upload Lambda Function +++
+# Upload Lambda Function
 resource "aws_lambda_function" "upload" {
   filename         = "${path.module}/../../../dist/upload.zip"
   function_name    = "${var.environment}-${var.project}-upload"
@@ -26,8 +26,7 @@ resource "aws_lambda_function" "upload" {
   }
   
   depends_on = [
-    aws_iam_role_policy_attachment.lambda_basic,
-    aws_cloudwatch_log_group.upload_logs
+    aws_iam_role_policy_attachment.lambda_basic
   ]
   
   tags = {
@@ -62,8 +61,7 @@ resource "aws_lambda_function" "process" {
   }
   
   depends_on = [
-    aws_iam_role_policy_attachment.lambda_basic,
-    aws_cloudwatch_log_group.process_logs
+    aws_iam_role_policy_attachment.lambda_basic
   ]
   
   tags = {
@@ -97,8 +95,7 @@ resource "aws_lambda_function" "status" {
   }
   
   depends_on = [
-    aws_iam_role_policy_attachment.lambda_basic,
-    aws_cloudwatch_log_group.status_logs
+    aws_iam_role_policy_attachment.lambda_basic
   ]
   
   tags = {
@@ -114,35 +111,4 @@ resource "aws_lambda_event_source_mapping" "sqs_processor" {
   batch_size       = 1
   
   depends_on = [aws_iam_role_policy_attachment.lambda_basic]
-}
-
-# CloudWatch Log Groups
-resource "aws_cloudwatch_log_group" "upload_logs" {
-  name              = "/aws/lambda/${var.environment}-${var.project}-upload"
-  retention_in_days = 14
-  
-  tags = {
-    Environment = var.environment
-    Project     = var.project
-  }
-}
-
-resource "aws_cloudwatch_log_group" "process_logs" {
-  name              = "/aws/lambda/${var.environment}-${var.project}-process"
-  retention_in_days = 14
-  
-  tags = {
-    Environment = var.environment
-    Project     = var.project
-  }
-}
-
-resource "aws_cloudwatch_log_group" "status_logs" {
-  name              = "/aws/lambda/${var.environment}-${var.project}-status"
-  retention_in_days = 14
-  
-  tags = {
-    Environment = var.environment
-    Project     = var.project
-  }
 }

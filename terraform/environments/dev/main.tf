@@ -11,11 +11,8 @@ terraform {
     }
   }
   
-  backend "s3" {
-    bucket = "cat-detection-terraform-state-777"
-    key    = "cat-detection/dev/terraform.tfstate"
-    region = "eu-west-1"
-  }
+  # Backend configuration is now in backend.tf (auto-generated)
+  # Run ./scripts/bootstrap-terraform.sh dev to create it
 }
 
 provider "aws" {
