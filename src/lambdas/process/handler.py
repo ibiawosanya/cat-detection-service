@@ -4,64 +4,68 @@ import os
 from decimal import Decimal
 from datetime import datetime
 
-# Initialize AWS clients
-rekognition = boto3.client('rekognition')
-dynamodb = boto3.resource('dynamodb')
-
-# Environment variables - using original names
-DYNAMODB_TABLE = os.environ['DYNAMODB_TABLE']
-S3_BUCKET = os.environ['S3_BUCKET']
-
-def lambda_handler(event, context):
+def process(event, context):
     """
     Process SQS messages containing image scan requests.
     Uses AWS Rekognition to detect cats and stores results in DynamoDB.
     """
     
     try:
+        print(f"Process Lambda started. Available env vars: {list(os.environ.keys())}")
+        
+        # Initialize AWS clients
+        rekognition = boto3.client('rekognition')
+        dynamodb = boto3.resource('dynamodb')
+        
+        # Get environment variables
+        dynamodb_table = os.environ['DYNAMODB_TABLE']
+        print(f"Using DynamoDB table: {dynamodb_table}")
+        
         # Process each SQS record
         for record in event['Records']:
             message_body = json.loads(record['body'])
             scan_id = message_body['scan_id']
             
-            # Handle both old and new message formats
+            # Get S3 info from the message (not environment variables)
+            s3_bucket = message_body.get('s3_bucket')
             image_key = message_body.get('image_key') or message_body.get('s3_key')
-            s3_bucket = message_body.get('s3_bucket') or S3_BUCKET
             
             print(f"Processing scan {scan_id} for image {image_key} in bucket {s3_bucket}")
             
+            if not s3_bucket or not image_key:
+                raise Exception(f"Missing S3 info in message: bucket={s3_bucket}, key={image_key}")
+            
             # Update status to processing
-            update_scan_status(scan_id, 'PROCESSING')
+            update_scan_status(scan_id, 'PROCESSING', dynamodb_table)
             
             try:
                 # Perform cat detection
                 result = detect_cats_in_image(image_key, s3_bucket)
                 
                 # Store results
-                store_scan_results(scan_id, image_key, result)
+                store_scan_results(scan_id, image_key, result, dynamodb_table)
                 
                 print(f"Successfully processed scan {scan_id}")
                 
             except Exception as e:
                 print(f"Error processing scan {scan_id}: {str(e)}")
                 # Update status to error
-                update_scan_status(scan_id, 'ERROR', str(e))
+                update_scan_status(scan_id, 'ERROR', dynamodb_table, str(e))
                 raise
     
     except Exception as e:
-        print(f"Error in lambda_handler: {str(e)}")
+        print(f"Error in process handler: {str(e)}")
         import traceback
         print(traceback.format_exc())
         raise
 
-def detect_cats_in_image(image_key, bucket_name=None):
+def detect_cats_in_image(image_key, bucket_name):
     """
     Use AWS Rekognition to detect cats in the image.
     """
     try:
-        if not bucket_name:
-            bucket_name = S3_BUCKET
-            
+        rekognition = boto3.client('rekognition')
+        
         print(f"Calling Rekognition for s3://{bucket_name}/{image_key}")
         
         # Call Rekognition to detect labels
@@ -153,12 +157,13 @@ def is_cat_related(label_name):
     label_lower = label_name.lower()
     return any(keyword in label_lower for keyword in cat_keywords)
 
-def update_scan_status(scan_id, status, error_message=None):
+def update_scan_status(scan_id, status, table_name, error_message=None):
     """
     Update the scan status in DynamoDB.
     """
     try:
-        table = dynamodb.Table(DYNAMODB_TABLE)
+        dynamodb = boto3.resource('dynamodb')
+        table = dynamodb.Table(table_name)
         
         update_expression = "SET #status = :status, #updated = :updated"
         expression_attribute_names = {
@@ -188,12 +193,13 @@ def update_scan_status(scan_id, status, error_message=None):
         print(f"Error updating scan status: {str(e)}")
         raise
 
-def store_scan_results(scan_id, image_key, detection_result):
+def store_scan_results(scan_id, image_key, detection_result, table_name):
     """
     Store the complete scan results in DynamoDB.
     """
     try:
-        table = dynamodb.Table(DYNAMODB_TABLE)
+        dynamodb = boto3.resource('dynamodb')
+        table = dynamodb.Table(table_name)
         
         # Prepare the item for DynamoDB with both old and new field names for compatibility
         timestamp = datetime.utcnow().isoformat()
