@@ -194,28 +194,67 @@ cat-detection-service/
 - Node.js >= 18
 - Python >= 3.11
 - Git
+- GitHub repository with proper setup (see GitHub Configuration below)
+
+### GitHub Repository Configuration
+
+#### Required Repository Secrets
+Navigate to **GitHub Repository → Settings → Secrets and variables → Actions** and add:
+
+```
+AWS_ACCESS_KEY_ID=your-aws-access-key-id
+AWS_SECRET_ACCESS_KEY=your-aws-secret-access-key
+```
+
+#### Required GitHub Environments
+Navigate to **GitHub Repository → Settings → Environments** and create:
+
+**1. Development Environment:**
+- **Name**: `dev` 
+- **Protection rules**: None (automatic deployment)
+- **Deployment branches**: `develop` branch only
+
+**2. Staging Environment:**
+- **Name**: `staging`
+- **Protection rules**: None (automatic deployment)
+- **Deployment branches**: `main` branch only
+
+**3. Production Environment:**
+- **Name**: `production`
+- **Protection rules**: 
+  - ✅ **Required reviewers**: Add team members/admin
+  - ✅ **Wait timer**: 5 minutes (optional)
+  - ✅ **Deployment branches**: `main` branch and release tags only
+- **Deployment branches**: Selected branches and tags
+
+**4. Destroy Environments (Optional but Recommended):**
+- **Name**: `dev-destroy`, `staging-destroy`, `production-destroy`
+- **Protection rules**: Same as corresponding environment
+- **Purpose**: Additional safety for infrastructure destruction
 
 ### Quick Start
 
 1. **Clone the repository**
    ```bash
-   git clone <repository-url>
+   git clone https://github.com/ibiawosanya/cat-detection-service
    cd cat-detection-service
    ```
 
-2. **Bootstrap Terraform backend**
+2. **Configure GitHub secrets and environments** (see above)
+
+3. **Bootstrap Terraform backend**
    ```bash
    ./scripts/bootstrap-terraform.sh dev
    ```
 
-3. **Deploy infrastructure**
+4. **Deploy infrastructure**
    ```bash
    cd terraform/environments/dev
    terraform init
    terraform apply
    ```
 
-4. **Deploy web UI**
+5. **Deploy web UI**
    ```bash
    cd ../../../src/web-ui
    npm install
@@ -286,20 +325,28 @@ curl $API_BASE_URL/status/scan-id-here?debug=true
 - API Gateway access logs enabled
 - Structured logging with correlation IDs
 
-## 🔒 Security
+## 🔒 Security & Access Control
 
-### Security Measures Implemented
-- **IAM**: Least privilege access for all resources
-- **API Gateway**: Request throttling and validation
-- **S3**: Bucket policies and public access blocks
-- **Lambda**: Runtime security scanning
-- **Dependencies**: Vulnerability scanning with Safety
-- **Infrastructure**: Security scanning with TFSec
+### AWS Permissions Required
+The GitHub Actions workflows require an AWS user/role with the following permissions:
+- **EC2**: Create/manage Lambda functions, API Gateway, CloudWatch
+- **S3**: Create/manage buckets and objects
+- **DynamoDB**: Create/manage tables
+- **SQS**: Create/manage queues
+- **CloudFront**: Create/manage distributions
+- **IAM**: Create/manage roles and policies (for Lambda execution)
+- **Rekognition**: Access to image analysis APIs
 
-### Security Scans
-- **Bandit**: Python code security analysis
-- **Safety**: Dependency vulnerability scanning
-- **TFSec**: Terraform security best practices
+### Production Environment Protection
+- **Manual approval required** for production deployments
+- **Enhanced security scanning** with strict failure policies
+- **Separate AWS accounts recommended** for production isolation
+- **Audit logging** for all production changes
+
+### Repository Access
+- **Development**: Direct push to `develop` branch (dev team)
+- **Staging**: PR merge to `main` branch (with review)
+- **Production**: Release creation (admin only) + manual approval
 
 ## 💰 Cost Optimization
 
@@ -389,22 +436,82 @@ git push origin v1.0.0
 - Security: Automated scanning in CI/CD
 - Testing: Unit and integration test coverage
 
-## 📞 Support & Troubleshooting
+## 🛠️ Troubleshooting
 
-### Common Issues
-1. **Upload fails**: Check file format (JPEG/PNG only)
-2. **Slow processing**: Normal for Rekognition analysis (2-5s)
-3. **403 errors**: Verify CORS configuration
+### Common GitHub Actions Issues
 
-### Monitoring
-- Check CloudWatch logs for detailed error information
-- Use scan_id for tracing requests end-to-end
-- Monitor DLQ for failed processing attempts
+#### 1. AWS Credentials Not Found
+```
+Error: Could not load credentials from any providers
+```
+**Solution**: Ensure `AWS_ACCESS_KEY_ID` and `AWS_SECRET_ACCESS_KEY` are set in GitHub repository secrets.
 
-### Debug Mode
-Add `?debug=true` to status endpoint for detailed information:
+#### 2. Terraform Backend Initialization
+```
+Error: Backend initialization required
+```
+**Solution**: Run bootstrap script for the environment:
 ```bash
-curl $API_BASE_URL/status/scan-id?debug=true
+./scripts/bootstrap-terraform.sh [dev|staging|prod]
+```
+
+#### 3. Terraform State Lock
+```
+Error: Error acquiring the state lock
+```
+**Solution**: Clear the lock manually:
+```bash
+# Get the lock ID from error message
+terraform force-unlock <LOCK-ID>
+```
+
+#### 4. S3 Bucket Not Empty (During Destroy)
+```
+Error: BucketNotEmpty: The bucket you tried to delete is not empty
+```
+**Solution**: Empty bucket first:
+```bash
+aws s3 rm s3://bucket-name --recursive
+aws s3api delete-bucket --bucket bucket-name
+```
+
+#### 5. CloudFront Distribution Deletion Timeout
+```
+CloudFront distribution still destroying after 15+ minutes
+```
+**Solution**: This is normal AWS behavior. CloudFront global propagation takes 15-45 minutes.
+
+### Deployment Issues
+
+#### 1. Lambda Function Timeout
+- **Cause**: Large image processing taking too long
+- **Solution**: Increase Lambda timeout in Terraform configuration
+
+#### 2. API Gateway CORS Issues
+- **Cause**: Cross-origin requests blocked
+- **Solution**: Verify CORS configuration in API Gateway module
+
+#### 3. Web UI Not Loading
+- **Cause**: CloudFront cache or S3 sync issues
+- **Solution**: Invalidate CloudFront cache:
+```bash
+aws cloudfront create-invalidation --distribution-id YOUR-ID --paths "/*"
+```
+
+### Debug Commands
+
+```bash
+# Check current AWS credentials
+aws sts get-caller-identity
+
+# List Terraform resources
+terraform state list
+
+# Check Lambda logs
+aws logs describe-log-groups --log-group-name-prefix /aws/lambda/
+
+# Test API endpoint
+curl https://your-api-gateway-url.amazonaws.com/dev/status/test
 ```
 
 ## 🤝 Contributing
